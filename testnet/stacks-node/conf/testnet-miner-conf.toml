@@ -1,20 +1,19 @@
 [node]
-working_dir = "/usr/local/data/llm_chain_local"
+working_dir = "/llm_chain_local"
 rpc_bind = "0.0.0.0:20443"
 p2p_bind = "0.0.0.0:20444"
-seed = "ad552104f8aec1dbf83d6d18c2fb7398695a6fae198fedf241848aeb8ea3c19b01"
-local_peer_seed = "ad552104f8aec1dbf83d6d18c2fb7398695a6fae198fedf241848aeb8ea3c19b01"
+seed = ""
+local_peer_seed = ""
 miner = true
-#bootstrap_node = "029266faff4c8e0ca4f934f34996a96af481df94a89b0c9bd515f3536a95682ddc@seed.testnet.hiro.so:30444"
 wait_time_for_microblocks = 1000
 miner_endpoint = "http://127.0.0.1:20443"
 
 [burnchain]
 chain = "bitcoin"
 mode = "xenon"
-peer_host = "34.87.21.99"
-username = "berry"
-password = "123456"
+peer_host = ""
+username = ""
+password = ""
 rpc_port = 18443
 peer_port = 18444
 wallet_name = "miner"
@@ -23,7 +22,7 @@ wallet_name = "miner"
 block_proposal_token = "123456"
 
 [miner]
-mining_key = "ad552104f8aec1dbf83d6d18c2fb7398695a6fae198fedf241848aeb8ea3c19b01"
+mining_key = ""
 
 [[events_observer]]
 endpoint = "127.0.0.1:30000"
@@ -48,5 +47,5 @@ address = "ST2TFVBMRPS5SSNP98DQKQ5JNB2B6NZM91C4K3P7B"
 amount = 10000000000000000
 
 [[ustx_balance]]
-address = "ST32DXFDST50QS8FV3NMRJQCGX5R5BSADTJDTHVHW"
+address = "ST6ZMM0CX01734YMS6Q7SPJHQR9GMQPSBH6RP8RV"
 amount = 90000000000000000
