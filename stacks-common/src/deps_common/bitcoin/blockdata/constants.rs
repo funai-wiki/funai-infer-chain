@@ -97,9 +97,9 @@ pub fn genesis_block(network: Network) -> Block {
                     version: 1,
                     prev_blockhash: Default::default(),
                     merkle_root: txdata.merkle_root(),
-                    time: 1231006505,
-                    bits: 0x1d00ffff,
-                    nonce: 2083236893,
+                    time: 1732851341,
+                    bits: 0x2000ffff,
+                    nonce: 514,
                 },
                 txdata,
             }

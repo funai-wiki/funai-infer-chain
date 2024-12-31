@@ -46,7 +46,7 @@ use crate::util_lib::db::{
 const BLOCK_HEADER_SIZE: u64 = 81;
 
 pub const BITCOIN_GENESIS_BLOCK_HASH_MAINNET: &'static str =
-    "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f";
+    "003e18ffe96725591979e7e4d7337f106437c9b0b9d7aacadedcade55d9cd494";
 pub const BITCOIN_GENESIS_BLOCK_MERKLE_ROOT_MAINNET: &'static str =
     "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b";
 

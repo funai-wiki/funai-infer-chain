@@ -71,6 +71,35 @@ INSERT OR REPLACE INTO pessimistic_estimator
     (estimate_key, current_value, samples)
 VALUES
     ('cc:2.1:ST000000000000000000002AMW42H:pox-4.stack-stx:read-count', 0, '[0,0,0,0]');
+",
+    "INSERT OR REPLACE INTO pessimistic_estimator
+    (estimate_key, current_value, samples)
+VALUES
+    ('cc:2.1:SP000000000000000000002Q6VF78:pox-4.stack-stx:runtime', 0, '[0,0,0,0]');
+",
+    "
+INSERT OR REPLACE INTO pessimistic_estimator
+    (estimate_key, current_value, samples)
+VALUES
+    ('cc:2.1:SP000000000000000000002Q6VF78:pox-4.stack-stx:write-length', 0, '[0,0,0,0]');
+",
+    "
+INSERT OR REPLACE INTO pessimistic_estimator
+    (estimate_key, current_value, samples)
+VALUES
+    ('cc:2.1:SP000000000000000000002Q6VF78:pox-4.stack-stx:write-count', 0, '[0,0,0,0]');
+",
+    "
+INSERT OR REPLACE INTO pessimistic_estimator
+    (estimate_key, current_value, samples)
+VALUES
+    ('cc:2.1:SP000000000000000000002Q6VF78:pox-4.stack-stx:read-length', 0, '[0,0,0,0]');
+",
+    "
+INSERT OR REPLACE INTO pessimistic_estimator
+    (estimate_key, current_value, samples)
+VALUES
+    ('cc:2.1:SP000000000000000000002Q6VF78:pox-4.stack-stx:read-count', 0, '[0,0,0,0]');
 "];
 
 iterable_enum!(CostField {
