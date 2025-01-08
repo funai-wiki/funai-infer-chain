@@ -16,7 +16,7 @@ name = "stacks_signer"
 path = "src/lib.rs"
 
 [[bin]]
-name = "stacks-signer"
+name = "infer-signer"
 path = "src/main.rs"
 
 [dependencies]

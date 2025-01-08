@@ -1,4 +1,4 @@
-# Stacks Blockchain Miner
+# Infer Blockchain Miner
 
 ## Prerequisites
 
@@ -7,20 +7,20 @@
 The VM will not need a lot of resources to run a miner - the most resources will be consumed during blockchain sync. \
 A single CPU system with at least 4GB of memory should be more than sufficient - as well as roughly 1TB of total disk space
 
-**Note: `btcuser` and `btcpass` are used for bitcoin RPC auth in this doc. Change as appropriate**
+**Note: `mainchainuser` and `mainchainpass` are used for bitcoin RPC auth in this doc. Change as appropriate**
 
 1. Separate disks for chainstates and OS
-    - mount a dedicated disk for bitcoin at `/bitcoin` of 10GB
-    - mount a dedicated disk for stacks-blockchain at `/stacks-blockchain` of at least 10GB
+    - mount a dedicated disk for bitcoin at `/main-chain` of 10GB
+    - mount a dedicated disk for stacks-blockchain at `/infer-chain` of at least 10GB
     - root volume `/` of at least 25GB
 2. Combined Disk for all data
     - root volume `/` of at least 25GB
 
 ```bash
-$ sudo mkdir -p /bitcoin
-$ sudo mkdir -p /stacks-blockchain
-$ sudo mkdir -p /etc/bitcoin
-$ sudo mkdir -p /etc/stacks-blockchain
+$ sudo mkdir -p /main-chain
+$ sudo mkdir -p /infer-chain
+$ sudo mkdir -p /etc/main-chain
+$ sudo mkdir -p /etc/infer-chain
 ```
 
 ### Install required packages
@@ -36,18 +36,18 @@ $ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh && source $HOME
 mount the disks to each filesystem created above - edit `/etc/fstab` to automount these disks at boot.
 
 ```
-/dev/xvdb1 /bitcoin xfs rw,relatime,attr2,inode64,noquota
-/dev/xvdc1 /stacks-blockchain xfs rw,relatime,attr2,inode64,noquota
+/dev/xvdb1 /main-chain xfs rw,relatime,attr2,inode64,noquota
+/dev/xvdc1 /infer-chain xfs rw,relatime,attr2,inode64,noquota
 ```
 
-## Install Bitcoin
+## Install Mainchain
 
 Choose either method, but bitcoin is required here. Building from source ensures you know what code you are running, but will a while to compile.
 
 ### Source Install
 
 ```
-$ git clone --depth 1 --branch funai https://github.com/funai-wiki/bitcoin.git /tmp/bitcoin && cd /tmp/bitcoin
+$ git clone --depth 1 --branch funai https://github.com/funai-wiki/bitcoin.git /tmp/mainchain && cd /tmp/mainchain
 $ sh contrib/install_db4.sh .
 $ ./autogen.sh
 $ export BDB_PREFIX="/tmp/bitcoin/db4" && ./configure BDB_LIBS="-L${BDB_PREFIX}/lib -ldb_cxx-4.8" BDB_CFLAGS="-I${BDB_PREFIX}/include" \
@@ -61,15 +61,15 @@ $ make -j2
 $ sudo make install
 ```
 
-### Bitcoin Config
+### Mainchain Config
 
 ```
-$ sudo bash -c 'cat <<EOF> /etc/bitcoin/bitcoin.conf
+$ sudo bash -c 'cat <<EOF> /etc/mainchain/mainchain.conf
 server=1
 #disablewallet=1
 datadir=/bitcoin
-rpcuser=btcuser
-rpcpassword=btcpass
+rpcuser=mainchainuser
+rpcpassword=mainchainpass
 rpcallowip=0.0.0.0/0
 bind=0.0.0.0:8333
 rpcbind=0.0.0.0:8332
@@ -82,38 +82,38 @@ txindex=1
 EOF'
 ```
 
-### Add bitcoin user and configure dirs
+### Add mainchain user and configure dirs
 
 ```
-$ sudo useradd bitcoin
-$ sudo chown -R bitcoin:bitcoin /bitcoin/
+$ sudo useradd mainchain
+$ sudo chown -R mainchain:mainchain /mainchain/
 ```
 
-### Install bitcoin.service unit
+### Install mainchain.service unit
 
 ```
-$ sudo bash -c 'cat <<EOF> /etc/systemd/system/bitcoin.service
+$ sudo bash -c 'cat <<EOF> /etc/systemd/system/mainchain.service
 [Unit]
-Description=Bitcoin daemon
+Description=Mainchain daemon
 After=network.target
 
 [Service]
-ExecStart=/usr/local/bin/bitcoind -daemon \
-                            -pid=/run/bitcoind/bitcoind.pid \
-                            -conf=/etc/bitcoin/bitcoin.conf
+ExecStart=/usr/local/bin/mainchaind -daemon \
+                            -pid=/run/mainchaind/mainchaind.pid \
+                            -conf=/etc/mainchain/mainchain.conf
 
 # Process management
 ####################
 Type=forking
-PIDFile=/run/bitcoind/bitcoind.pid
+PIDFile=/run/mainchaind/mainchaind.pid
 Restart=on-failure
 TimeoutStopSec=600
 # Directory creation and permissions
 ####################################
-# Run as bitcoin:bitcoin
-User=bitcoin
-Group=bitcoin
-RuntimeDirectory=bitcoind
+# Run as mainchain:mainchain
+User=mainchain
+Group=mainchain
+RuntimeDirectory=mainchaind
 RuntimeDirectoryMode=0710
 # Hardening measures
 ####################
@@ -136,23 +136,23 @@ WantedBy=multi-user.target
 EOF'
 ```
 
-### Enable service and start bitcoin
+### Enable service and start mainchain
 
 ```
 $ sudo systemctl daemon-reload
-$ sudo systemctl enable bitcoin.service
-$ sudo systemctl start bitcoin.service
+$ sudo systemctl enable mainchain.service
+$ sudo systemctl start mainchain.service
 ```
 
-**now we wait a few days until bitcoin syncs to chain tip**
+**now we wait a few minutes until mainchain syncs to chain tip**
 
 ```
-$ sudo tail -f /bitcoin/debug.log
-$ bitcoin-cli \
+$ sudo tail -f /mainchain/debug.log
+$ mainchain-cli \
   -rpcconnect=localhost \
   -rpcport=8332 \
-  -rpcuser=btcuser \
-  -rpcpassword=btcpass \
+  -rpcuser=mainchainuser \
+  -rpcpassword=mainchainpass \
 getblockchaininfo | jq .blocks
 ```
 
@@ -184,76 +184,76 @@ $ ./node_modules/.bin/stx make_keychain 2>/dev/null | jq
 }
 ```
 
-### Create bitcoin wallet and import it into this instance
+### Create mainchain wallet and import it into this instance
 
 We'll be using the wallet values from the previous `npx` command, "btcAddress" and "wif"
 
 ```bash
 $curl \
---user btcuser:btcpass \
+--user mainchainuser:mainchainpass \
 --data-binary '{"jsonrpc": "2.0", "id": "curltest", "method": "createwallet", "params": {"wallet_name":"miner","avoid_reuse":true,"descriptors":false,"load_on_startup":true}}' \
 -H 'content-type: application/json' http://localhost:8332/
 
-$ sudo systemctl restart bitcoin
-$ bitcoin-cli \
+$ sudo systemctl restart mainchain
+$ mainchain-cli \
   -rpcconnect=localhost \
   -rpcport=8332 \
-  -rpcuser=btcuser \
-  -rpcpassword=btcpass \
+  -rpcuser=mainchainuser \
+  -rpcpassword=mainchainpass \
 importmulti '[{ "scriptPubKey": { "address": "<npx btcAddress>" }, "timestamp":"now", "keys": [ "<npx wif>" ]}]' '{"rescan": true}'
-$ bitcoin-cli \
+$ mainchain-cli \
   -rpcconnect=localhost \
   -rpcport=8332 \
-  -rpcuser=btcuser \
-  -rpcpassword=btcpass \
+  -rpcuser=mainchainuser \
+  -rpcpassword=mainchainpass \
 getaddressinfo <npx btcAddress>
 
 ```
 
-Once imported, the wallet will need to be funded with some bitcoin.
+Once imported, the wallet will need to be funded with some mainchain token.
 
-## stacks-blockchain
+## infer-chain
 
-### Build and install stacks-blockchain from source (via script)
+### Build and install infer-chain from source (via script)
 
 ```bash
 $ cd $HOME && cat <<EOF> $HOME/build-stacks.sh
 #!/bin/sh
 CURDIR=\$(pwd)
-DEST=/usr/local/bin/stacks-node
-GIT_DIR=\$HOME/stacks-blockchain
+DEST=/usr/local/bin/infer-node
+GIT_DIR=\$HOME/infer-chain
 if [ ! -d \${GIT_DIR} ]; then
   git clone https://github.com/funai-wiki/stacks-core.git \${GIT_DIR}
 else
   git -C \${GIT_DIR} pull -r
 fi
-cd \${GIT_DIR}/testnet/stacks-node
-cargo build --features monitoring_prom,slog_json --release --bin stacks-node
+cd \${GIT_DIR}/testnet/infer-node
+cargo build --features monitoring_prom,slog_json --release --bin infer-node
 if [ "\$?" -eq "0" ]; then
   if [ -f \${DEST} ]; then
     sudo rm -f \${DEST}
   fi
   echo "Copying stacks-node to $DEST using sudo"
-  sudo cp -a \${GIT_DIR}/target/release/stacks-node \${DEST}
+  sudo cp -a \${GIT_DIR}/target/release/infer-node \${DEST}
 fi
 cd \${CURDIR}
 EOF
 $ sh $HOME/build-stacks.sh
 ```
 
-### Build and install stacks-blockchain from source
+### Build and install infer-chain from source
 
 ```bash
-$ git clone https://github.com/blockstack/stacks-blockchain.git $HOME/stacks-blockchain
-$ cd $HOME/stacks-blockchain/testnet/stacks-node
-$ cargo build --features monitoring_prom,slog_json --release --bin stacks-node
-$ sudo cp -a $HOME/stacks-blockchain/target/release/stacks-node /usr/local/bin/stacks-node
+$ git clone https://github.com/funai-wiki/stacks-core.git $HOME/infer-chain
+$ cd $HOME/infer-chain/testnet/stacks-node
+$ cargo build --features monitoring_prom,slog_json --release --bin infer-node
+$ sudo cp -a $HOME/infer-chain/target/release/infer-node /usr/local/bin/infer-node
 ```
 
 ```bash
-$ sudo bash -c 'cat <<EOF> /etc/stacks-blockchain/follower.toml
+$ sudo bash -c 'cat <<EOF> /etc/infer-chain/follower.toml
 [node]
-working_dir = "/stacks-blockchain"
+working_dir = "/infer-chain"
 rpc_bind = "0.0.0.0:20443"
 p2p_bind = "0.0.0.0:20444"
 bootstrap_node = "03c830906d80795257ae211fac6ed786a131ec43f3b05e5efc8ce607a1a2c16b5b@34.143.166.224:20444"
@@ -263,8 +263,8 @@ miner_endpoint = "http://127.0.0.1:20443"
 chain = "bitcoin"
 mode = "mainnet"
 peer_host = "127.0.0.1"
-username = "btcuser"
-password = "btcpass"
+username = "mainchainuser"
+password = "mainchainpass"
 rpc_port = 8332
 peer_port = 8333
 EOF'
@@ -273,9 +273,9 @@ EOF'
 **replace `seed` and `local_peer_seed` with the `privateKey` value from the previous `npx` command**
 
 ```bash
-$ sudo bash -c 'cat <<EOF> /etc/stacks-blockchain/miner.toml
+$ sudo bash -c 'cat <<EOF> /etc/infer-chain/miner.toml
 [node]
-working_dir = "/stacks-blockchain"
+working_dir = "/infer-chain"
 rpc_bind = "0.0.0.0:20443"
 p2p_bind = "0.0.0.0:20444"
 bootstrap_node = "03c830906d80795257ae211fac6ed786a131ec43f3b05e5efc8ce607a1a2c16b5b@34.143.166.224:20444"
@@ -290,8 +290,8 @@ miner_endpoint = "http://127.0.0.1:20443"
 chain = "bitcoin"
 mode = "mainnet"
 peer_host = "127.0.0.1"
-username = "btcuser"
-password = "btcpass"
+username = "mainchainuser"
+password = "mainchainpass"
 rpc_port = 8332
 peer_port = 8333
 wallet_name = "miner"
@@ -314,43 +314,43 @@ enabled = true
 EOF'
 ```
 
-### Add stacks user and configure dirs
+### Add infer user and configure dirs
 
 ```bash
-$ sudo useradd stacks
-$ sudo chown -R stacks:stacks /stacks-blockchain/
+$ sudo useradd infer
+$ sudo chown -R infer:infer /infer-chain/
 ```
 
-### Install stacks.service unit
+### Install infer.service unit
 
 ```bash
-$ sudo bash -c 'cat <<EOF> /etc/systemd/system/stacks.service
+$ sudo bash -c 'cat <<EOF> /etc/systemd/system/infer.service
 [Unit]
 Description=Stacks Blockchain
-Requires=bitcoin.service
-After=bitcoin.service
-ConditionFileIsExecutable=/usr/local/bin/stacks-node
-ConditionPathExists=/stacks-blockchain/
+Requires=mainchain.service
+After=mainchain.service
+ConditionFileIsExecutable=/usr/local/bin/infer-node
+ConditionPathExists=/infer-chain/
 
 [Service]
-ExecStart=/bin/sh -c "/usr/local/bin/stacks-node start --config=/etc/stacks-blockchain/follower.toml >> /stacks-blockchain/follower.log 2>&1"
-ExecStartPost=/bin/sh -c "umask 022; sleep 2 && pgrep -f \"/usr/local/bin/stacks-node start --config=/etc/stacks-blockchain/follower.toml\" > /run/stacks-blockchain/stacks.pid"
-ExecStopPost=/bin/sh -c "if [ -f \"/run/stacks-blockchain/stacks.pid\" ]; then rm -f /run/stacks-blockchain/stacks.pid; fi"
+ExecStart=/bin/sh -c "/usr/local/bin/infer-node start --config=/etc/infer-chain/follower.toml >> /infer-chain/follower.log 2>&1"
+ExecStartPost=/bin/sh -c "umask 022; sleep 2 && pgrep -f \"/usr/local/bin/infer-node start --config=/etc/infer-chain/follower.toml\" > /run/infer-chain/infer.pid"
+ExecStopPost=/bin/sh -c "if [ -f \"/run/stacks-blockchain/infer.pid\" ]; then rm -f /run/infer-chain/infer.pid; fi"
 
 # Process management
 ####################
 Type=simple
-PIDFile=/run/stacks-blockchain/stacks.pid
+PIDFile=/run/infer-chain/infer.pid
 Restart=on-failure
 TimeoutStopSec=600
 KillSignal=SIGTERM
 
 # Directory creation and permissions
 ####################################
-# Run as bitcoin:bitcoin
-User=stacks
-Group=stacks
-RuntimeDirectory=stacks-blockchain
+# Run as mainchain:mainchain
+User=infer
+Group=infer
+RuntimeDirectory=infer-chain
 RuntimeDirectoryMode=0710
 
 # Hardening measures
@@ -378,8 +378,8 @@ EOF'
 
 ```
 $ sudo systemctl daemon-reload
-$ sudo systemctl enable stacks.service
-$ sudo systemctl start stacks.service
+$ sudo systemctl enable infer.service
+$ sudo systemctl start infer.service
 ```
 
 ### Deploy large models
@@ -400,12 +400,12 @@ $ stx stack 1000000000 1 Ook6goo1Jee5ZuPualeiqu9RiN8wooshoo ooxeemeitar4ahw0ca8a
 
 After stacking takes effect, you can run the stacker node as follows.
 
-### Build stacks-signer from source
+### Build infer-signer from source
 
 ```
 $ cd stacks-core/stacks-signer
-$ cargo build --release
-$ sudo bash -c 'cat <<EOF> /etc/stacks-blockchain/signer.toml
+$ cargo build --release --bin infer-signer
+$ sudo bash -c 'cat <<EOF> /etc/infer-chain/signer.toml
 # The IP address and port where your Stacks node can be accessed.
 # The port 20443 is the default RPC endpoint for Stacks nodes.
 # Note that you must use an IP address - DNS hosts are not supported at this time.
@@ -421,7 +421,7 @@ network = "mainnet"
 
 # this is a file path where your signer will persist data. If using Docker,
 # this must be within a volume, so that data can be persisted across restarts
-db_path = "/data/llm_signer_local/signer.db"
+db_path = "/etc/infer-chain/signer.db"
 
 # an authentication token that is used for some HTTP requests made from the
 # signer to your Stacks node. You’ll need to use this later on when configur$ng
@@ -433,19 +433,19 @@ auth_password = "<the block_proposal_token in the miner.toml>"
 # previous step.
 stacks_private_key = "<npx privateKey>"
 EOF'
-$ STACKS_LOG_INFO=1 nohup ./target/release/stacks-signer run --config /etc/stacks-blockchain/signer.toml >> ./signer.log 2>&1 &
+$ STACKS_LOG_INFO=1 nohup ./target/release/infer-signer run --config /etc/infer-chain/signer.toml >> ./signer.log 2>&1 &
 ```
 
 After the stacker node is running, you need to modify the miner configuration and restart it. 
 This is because after nakamoto takes effect, subsequent blocks require the signature and verification of the stacker.
 
 ```
-$ cat <<EOL>> /etc/stacks-blockchain/miner.toml
+$ cat <<EOL>> /etc/infer-chain/miner.toml
 [[events_observer]]
 endpoint = "127.0.0.1:30000"
 retry_count = 255
 include_data_events = false
 events_keys = ["*","stackerdb","block_proposal"]
 EOL
-$ systemctl restart stacks.service
+$ systemctl restart infer.service
 ```

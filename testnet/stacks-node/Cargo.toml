@@ -55,11 +55,11 @@ version = "=0.24.2"
 features = ["blob", "serde_json", "i128_blob", "bundled", "trace"]
 
 [[bin]]
-name = "stacks-node"
+name = "infer-node"
 path = "src/main.rs"
 
 [[bin]]
-name = "stacks-events"
+name = "infer-events"
 path = "src/stacks_events.rs"
 
 [features]
