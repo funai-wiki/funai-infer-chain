@@ -42,6 +42,66 @@ CREATE TABLE pessimistic_estimator (
     samples TEXT NOT NULL
 )";
 
+const INIT_POX4_ESTIMATES: &'static [&str] = &["
+INSERT OR REPLACE INTO pessimistic_estimator
+    (estimate_key, current_value, samples)
+VALUES
+    ('cc:2.1:ST000000000000000000002AMW42H:pox-4.stack-stx:runtime', 0, '[0,0,0,0]');
+",
+    "
+INSERT OR REPLACE INTO pessimistic_estimator
+    (estimate_key, current_value, samples)
+VALUES
+    ('cc:2.1:ST000000000000000000002AMW42H:pox-4.stack-stx:write-length', 0, '[0,0,0,0]');
+",
+    "
+INSERT OR REPLACE INTO pessimistic_estimator
+    (estimate_key, current_value, samples)
+VALUES
+    ('cc:2.1:ST000000000000000000002AMW42H:pox-4.stack-stx:write-count', 0, '[0,0,0,0]');
+",
+    "
+INSERT OR REPLACE INTO pessimistic_estimator
+    (estimate_key, current_value, samples)
+VALUES
+    ('cc:2.1:ST000000000000000000002AMW42H:pox-4.stack-stx:read-length', 0, '[0,0,0,0]');
+",
+    "
+INSERT OR REPLACE INTO pessimistic_estimator
+    (estimate_key, current_value, samples)
+VALUES
+    ('cc:2.1:ST000000000000000000002AMW42H:pox-4.stack-stx:read-count', 0, '[0,0,0,0]');
+",
+    "INSERT OR REPLACE INTO pessimistic_estimator
+    (estimate_key, current_value, samples)
+VALUES
+    ('cc:2.1:SP000000000000000000002Q6VF78:pox-4.stack-stx:runtime', 0, '[0,0,0,0]');
+",
+    "
+INSERT OR REPLACE INTO pessimistic_estimator
+    (estimate_key, current_value, samples)
+VALUES
+    ('cc:2.1:SP000000000000000000002Q6VF78:pox-4.stack-stx:write-length', 0, '[0,0,0,0]');
+",
+    "
+INSERT OR REPLACE INTO pessimistic_estimator
+    (estimate_key, current_value, samples)
+VALUES
+    ('cc:2.1:SP000000000000000000002Q6VF78:pox-4.stack-stx:write-count', 0, '[0,0,0,0]');
+",
+    "
+INSERT OR REPLACE INTO pessimistic_estimator
+    (estimate_key, current_value, samples)
+VALUES
+    ('cc:2.1:SP000000000000000000002Q6VF78:pox-4.stack-stx:read-length', 0, '[0,0,0,0]');
+",
+    "
+INSERT OR REPLACE INTO pessimistic_estimator
+    (estimate_key, current_value, samples)
+VALUES
+    ('cc:2.1:SP000000000000000000002Q6VF78:pox-4.stack-stx:read-count', 0, '[0,0,0,0]');
+"];
+
 iterable_enum!(CostField {
     RuntimeCost,
     WriteLength,
@@ -206,6 +266,9 @@ impl PessimisticEstimator {
     fn instantiate_db(tx: &SqliteTransaction) -> Result<(), SqliteError> {
         if !Self::db_already_instantiated(tx)? {
             tx.execute(CREATE_TABLE, rusqlite::NO_PARAMS)?;
+            for  init_stat in INIT_POX4_ESTIMATES.iter() {
+                tx.execute(*init_stat, rusqlite::NO_PARAMS)?;
+            }
         }
 
         Ok(())
@@ -248,7 +311,8 @@ impl PessimisticEstimator {
             TransactionPayload::Infer(..) => "infer".to_string(),
         };
 
-        format!("{}:{}", &tx_descriptor, field)
+        let res = format!("{}:{}", &tx_descriptor, field);
+        res
     }
 }
 

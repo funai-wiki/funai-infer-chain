@@ -331,7 +331,7 @@ impl ConfigFile {
             ..BurnchainConfigFile::default()
         };
 
-        burnchain.add_affirmation_overrides_xenon();
+        // burnchain.add_affirmation_overrides_xenon();
 
         let node = NodeConfigFile {
             bootstrap_node: Some("029266faff4c8e0ca4f934f34996a96af481df94a89b0c9bd515f3536a95682ddc@seed.testnet.hiro.so:30444".to_string()),
@@ -1539,7 +1539,7 @@ impl BurnchainConfigFile {
             if self.magic_bytes.is_none() {
                 self.magic_bytes = ConfigFile::xenon().burnchain.unwrap().magic_bytes;
             }
-            self.add_affirmation_overrides_xenon();
+            // self.add_affirmation_overrides_xenon();
         }
 
         let mode = self.mode.unwrap_or(default_burnchain_config.mode);

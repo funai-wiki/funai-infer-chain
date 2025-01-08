@@ -13,14 +13,14 @@ network = "testnet"
 
 # this is a file path where your signer will persist data. If using Docker,
 # this must be within a volume, so that data can be persisted across restarts
-db_path = "/Users/bj89200ml/Documents/llm_signer_local/signer.db"
+db_path = "/data/llm_signer_local/signer.db"
 
 # an authentication token that is used for some HTTP requests made from the
 # signer to your Stacks node. You’ll need to use this later on when configur$ng
 # your Stacks node. You create this field yourself, rather than it being generated
 # with your private key.
-auth_password = "123456"
+auth_password = ""
 
 # This is the privateKey field from the keys you generated in the
 # previous step.
-stacks_private_key = "863c2b1fe42f8d8f4bfc210919c9aca8aab0f836b402a768e0431ba97727822601"
+stacks_private_key = ""

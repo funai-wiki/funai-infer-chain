@@ -79,7 +79,7 @@ fn bitcoin_genesis_tx() -> Transaction {
         .push_opcode(opcodes::All::OP_CHECKSIG)
         .into_script();
     ret.output.push(TxOut {
-        value: 50 * COIN_VALUE,
+        value: 15 * COIN_VALUE,
         script_pubkey: out_script,
     });
 
@@ -97,9 +97,9 @@ pub fn genesis_block(network: Network) -> Block {
                     version: 1,
                     prev_blockhash: Default::default(),
                     merkle_root: txdata.merkle_root(),
-                    time: 1231006505,
-                    bits: 0x1d00ffff,
-                    nonce: 2083236893,
+                    time: 1732851341,
+                    bits: 0x2000ffff,
+                    nonce: 514,
                 },
                 txdata,
             }
@@ -111,9 +111,9 @@ pub fn genesis_block(network: Network) -> Block {
                     version: 1,
                     prev_blockhash: Default::default(),
                     merkle_root: txdata.merkle_root(),
-                    time: 1296688602,
-                    bits: 0x1d00ffff,
-                    nonce: 414098458,
+                    time: 1732851341,
+                    bits: 0x2000ffff,
+                    nonce: 514,
                 },
                 txdata,
             }

@@ -101,34 +101,34 @@ pub const INITIAL_MINING_BONUS_WINDOW: u16 = 10_000;
 
 pub const STACKS_2_0_LAST_BLOCK_TO_PROCESS: u64 = 700_000;
 pub const MAINNET_2_0_GENESIS_ROOT_HASH: &str =
-    "9653c92b1ad726e2dc17862a3786f7438ab9239c16dd8e7aaba8b0b5c34b52af";
+    "e63f39bf57b432f9447a859f129d3f387f1dd863f5cb88bba1e6af9c667597b3";
 
 /// This is the "dummy" parent to the actual first burnchain block that we process.
 pub const FIRST_BURNCHAIN_CONSENSUS_HASH: ConsensusHash = ConsensusHash([0u8; 20]);
 
 // TODO: TO BE SET BY STACKS_V1_MINER_THRESHOLD
-pub const BITCOIN_MAINNET_FIRST_BLOCK_HEIGHT: u64 = 666050;
-pub const BITCOIN_MAINNET_FIRST_BLOCK_TIMESTAMP: u32 = 1610643248;
+pub const BITCOIN_MAINNET_FIRST_BLOCK_HEIGHT: u64 = 0;
+pub const BITCOIN_MAINNET_FIRST_BLOCK_TIMESTAMP: u32 = 1732851341;
 pub const BITCOIN_MAINNET_FIRST_BLOCK_HASH: &str =
-    "0000000000000000000ab248c8e35c574514d052a83dbc12669e19bc43df486e";
-pub const BITCOIN_MAINNET_INITIAL_REWARD_START_BLOCK: u64 = 651389;
-pub const BITCOIN_MAINNET_STACKS_2_05_BURN_HEIGHT: u64 = 713_000;
-pub const BITCOIN_MAINNET_STACKS_21_BURN_HEIGHT: u64 = 781_551;
+    "003e18ffe96725591979e7e4d7337f106437c9b0b9d7aacadedcade55d9cd494";
+pub const BITCOIN_MAINNET_INITIAL_REWARD_START_BLOCK: u64 = 0;
+pub const BITCOIN_MAINNET_STACKS_2_05_BURN_HEIGHT: u64 = 10;
+pub const BITCOIN_MAINNET_STACKS_21_BURN_HEIGHT: u64 = 20;
 /// This is Epoch-2.2 activation height proposed in SIP-022
-pub const BITCOIN_MAINNET_STACKS_22_BURN_HEIGHT: u64 = 787_651;
+pub const BITCOIN_MAINNET_STACKS_22_BURN_HEIGHT: u64 = 30;
 /// This is Epoch-2.3 activation height proposed in SIP-023
-pub const BITCOIN_MAINNET_STACKS_23_BURN_HEIGHT: u64 = 788_240;
+pub const BITCOIN_MAINNET_STACKS_23_BURN_HEIGHT: u64 = 40;
 /// This is Epoch-2.3, now Epoch-2.4, activation height proposed in SIP-024
-pub const BITCOIN_MAINNET_STACKS_24_BURN_HEIGHT: u64 = 791_551;
+pub const BITCOIN_MAINNET_STACKS_24_BURN_HEIGHT: u64 = 50;
 /// This is Epoch-2.5, activation height proposed in SIP-021
-pub const BITCOIN_MAINNET_STACKS_25_BURN_HEIGHT: u64 = 840_360;
+pub const BITCOIN_MAINNET_STACKS_25_BURN_HEIGHT: u64 = 60;
 /// This is Epoch-3.0, activation height proposed in SIP-021
-pub const BITCOIN_MAINNET_STACKS_30_BURN_HEIGHT: u64 = 2_000_000;
+pub const BITCOIN_MAINNET_STACKS_30_BURN_HEIGHT: u64 = 127;
 
-pub const BITCOIN_TESTNET_FIRST_BLOCK_HEIGHT: u64 = 2000000;
-pub const BITCOIN_TESTNET_FIRST_BLOCK_TIMESTAMP: u32 = 1622691840;
+pub const BITCOIN_TESTNET_FIRST_BLOCK_HEIGHT: u64 = 0;
+pub const BITCOIN_TESTNET_FIRST_BLOCK_TIMESTAMP: u32 = 1732851341;
 pub const BITCOIN_TESTNET_FIRST_BLOCK_HASH: &str =
-    "000000000000010dd0863ec3d7a0bae17c1957ae1de9cbcdae8e77aad33e3b8c";
+    "003e18ffe96725591979e7e4d7337f106437c9b0b9d7aacadedcade55d9cd494";
 pub const BITCOIN_TESTNET_STACKS_2_05_BURN_HEIGHT: u64 = 2_104_380;
 pub const BITCOIN_TESTNET_STACKS_21_BURN_HEIGHT: u64 = 2_422_101;
 pub const BITCOIN_TESTNET_STACKS_22_BURN_HEIGHT: u64 = 2_431_300;
@@ -172,7 +172,7 @@ pub const POX_REWARD_CYCLE_LENGTH: u32 = 2100;
 ///   is 25%
 pub const POX_MAXIMAL_SCALING: u128 = 4;
 /// This is the amount that PoX threshold adjustments are stepped by.
-pub const POX_THRESHOLD_STEPS_USTX: u128 = 10_000 * (MICROSTACKS_PER_STACKS as u128);
+pub const POX_THRESHOLD_STEPS_USTX: u128 = 1_000 * (MICROSTACKS_PER_STACKS as u128);
 
 pub const POX_MAX_NUM_CYCLES: u8 = 12;
 
@@ -331,62 +331,62 @@ lazy_static! {
         StacksEpoch {
             epoch_id: StacksEpochId::Epoch10,
             start_height: 0,
-            end_height: BITCOIN_TESTNET_FIRST_BLOCK_HEIGHT,
+            end_height: 0,
             block_limit: BLOCK_LIMIT_MAINNET_10.clone(),
             network_epoch: PEER_VERSION_EPOCH_1_0
         },
         StacksEpoch {
             epoch_id: StacksEpochId::Epoch20,
-            start_height: BITCOIN_TESTNET_FIRST_BLOCK_HEIGHT,
-            end_height: BITCOIN_TESTNET_STACKS_2_05_BURN_HEIGHT,
-            block_limit: BLOCK_LIMIT_MAINNET_20.clone(),
+            start_height: 0,
+            end_height: 10,
+            block_limit: HELIUM_BLOCK_LIMIT_20.clone(),
             network_epoch: PEER_VERSION_EPOCH_2_0
         },
         StacksEpoch {
             epoch_id: StacksEpochId::Epoch2_05,
-            start_height: BITCOIN_TESTNET_STACKS_2_05_BURN_HEIGHT,
-            end_height: BITCOIN_TESTNET_STACKS_21_BURN_HEIGHT,
-            block_limit: BLOCK_LIMIT_MAINNET_205.clone(),
+            start_height: 10,
+            end_height: 20,
+            block_limit: HELIUM_BLOCK_LIMIT_20.clone(),
             network_epoch: PEER_VERSION_EPOCH_2_05
         },
         StacksEpoch {
             epoch_id: StacksEpochId::Epoch21,
-            start_height: BITCOIN_TESTNET_STACKS_21_BURN_HEIGHT,
-            end_height: BITCOIN_TESTNET_STACKS_22_BURN_HEIGHT,
-            block_limit: BLOCK_LIMIT_MAINNET_21.clone(),
+            start_height: 20,
+            end_height: 30,
+            block_limit: HELIUM_BLOCK_LIMIT_20.clone(),
             network_epoch: PEER_VERSION_EPOCH_2_1
         },
         StacksEpoch {
             epoch_id: StacksEpochId::Epoch22,
-            start_height: BITCOIN_TESTNET_STACKS_22_BURN_HEIGHT,
-            end_height: BITCOIN_TESTNET_STACKS_23_BURN_HEIGHT,
-            block_limit: BLOCK_LIMIT_MAINNET_21.clone(),
+            start_height: 30,
+            end_height: 40,
+            block_limit: HELIUM_BLOCK_LIMIT_20.clone(),
             network_epoch: PEER_VERSION_EPOCH_2_2
         },
         StacksEpoch {
             epoch_id: StacksEpochId::Epoch23,
-            start_height: BITCOIN_TESTNET_STACKS_23_BURN_HEIGHT,
-            end_height: BITCOIN_TESTNET_STACKS_24_BURN_HEIGHT,
-            block_limit: BLOCK_LIMIT_MAINNET_21.clone(),
+            start_height: 40,
+            end_height: 50,
+            block_limit: HELIUM_BLOCK_LIMIT_20.clone(),
             network_epoch: PEER_VERSION_EPOCH_2_3
         },
         StacksEpoch {
             epoch_id: StacksEpochId::Epoch24,
-            start_height: BITCOIN_TESTNET_STACKS_24_BURN_HEIGHT,
-            end_height: BITCOIN_TESTNET_STACKS_25_BURN_HEIGHT,
-            block_limit: BLOCK_LIMIT_MAINNET_21.clone(),
+            start_height: 50,
+            end_height: 60,
+            block_limit: HELIUM_BLOCK_LIMIT_20.clone(),
             network_epoch: PEER_VERSION_EPOCH_2_4
         },
         StacksEpoch {
             epoch_id: StacksEpochId::Epoch25,
-            start_height: BITCOIN_TESTNET_STACKS_25_BURN_HEIGHT,
-            end_height: BITCOIN_TESTNET_STACKS_30_BURN_HEIGHT,
+            start_height: 60,
+            end_height: 127,
             block_limit: BLOCK_LIMIT_MAINNET_21.clone(),
             network_epoch: PEER_VERSION_EPOCH_2_5
         },
         StacksEpoch {
             epoch_id: StacksEpochId::Epoch30,
-            start_height: BITCOIN_TESTNET_STACKS_30_BURN_HEIGHT,
+            start_height: 127,
             end_height: STACKS_EPOCH_MAX,
             block_limit: BLOCK_LIMIT_MAINNET_21.clone(),
             network_epoch: PEER_VERSION_EPOCH_3_0

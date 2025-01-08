@@ -52,8 +52,8 @@ use crate::util_lib::db::Error as DBError;
 
 pub const USER_AGENT: &'static str = "Stacks/2.1";
 
-pub const BITCOIN_MAINNET: u32 = 0xD9B4BEF9;
-pub const BITCOIN_TESTNET: u32 = 0x0709110B;
+pub const BITCOIN_MAINNET: u32 = 0x34FE12AC;
+pub const BITCOIN_TESTNET: u32 = 0x450F23BD;
 pub const BITCOIN_REGTEST: u32 = 0xDAB5BFFA;
 
 pub const BITCOIN_MAINNET_NAME: &'static str = "mainnet";
