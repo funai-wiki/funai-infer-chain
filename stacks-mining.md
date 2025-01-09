@@ -173,12 +173,13 @@ It will generate the cli binary 'stx' in the dir ./node_modules/.bin
 ```bash
 $ ./node_modules/.bin/stx make_keychain 2>/dev/null | jq
 {
-  "mnemonic": "frown lens very suit ocean trigger animal flip retire dose various mobile record emerge torch client sorry shy party session until planet member exclude",
+  "mnemonic": "banner best super roast chief nominee romance choice chef artefact shrug wave ritual brass vacuum witness fringe ticket install obvious coffee around aunt ice",
   "keyInfo": {
-    "privateKey": "ooxeemeitar4ahw0ca8anu4thae7aephahshae1pahtae5oocahthahho4ahn7eici",
-    "address": "STTXOG3AIHOHNAEH5AU6IEX9OOTOH8SEIWEI5IJ9",
-    "btcAddress": "Ook6goo1Jee5ZuPualeiqu9RiN8wooshoo",
-    "wif": "rohCie2ein2chaed9kaiyoo6zo1aeQu1yae4phooShov2oosh4ox",
+    "privateKey": "a1c7d36e014ef2e3e7c7f63adcd373bf289f352371b9cf8daee8a6fa9f2d4f5601",
+    "publicKey": "02968cbc30be49e82706907ec63042f66f17882536db1a7700fd35ef6fce402234",
+    "address": "SP2ZMFRFWCD0MWQZVSV8CCHB44M1C0EFSYD3VA2BV",
+    "btcAddress": "1JSQB9BqYMpPrSXPDBn95bA5MHWkGH4K9R",
+    "wif": "L2eC3LwxyUatyugxLjivwwvjrfTSRfnokzHzLyyaeCyyQTeNXVHE",
     "index": 0
   }
 }
@@ -395,7 +396,7 @@ Before becoming a stacker, you need to obtain STX by purchasing or being a miner
 ```
 $./node_modules/.bin/stx stack <stx amount> <cycle length> <npx btcAddress> <npx privateKey>
 e.g
-$ stx stack 1000000000 1 Ook6goo1Jee5ZuPualeiqu9RiN8wooshoo ooxeemeitar4ahw0ca8anu4thae7aephahshae1pahtae5oocahthahho4ahn7eici
+$ stx stack 1000000000 1 1JSQB9BqYMpPrSXPDBn95bA5MHWkGH4K9R a1c7d36e014ef2e3e7c7f63adcd373bf289f352371b9cf8daee8a6fa9f2d4f5601
 ```
 
 After stacking takes effect, you can run the stacker node as follows.
@@ -448,4 +449,10 @@ include_data_events = false
 events_keys = ["*","stackerdb","block_proposal"]
 EOL
 $ systemctl restart infer.service
+```
+
+### Submit a infer transaction
+
+```
+$ stx infer --address SP2ZMFRFWCD0MWQZVSV8CCHB44M1C0EFSYD3VA2BV --userInput "Is the Earth round?" --context "{}" --fee 206 --nonce 0 --payment_key a1c7d36e014ef2e3e7c7f63adcd373bf289f352371b9cf8daee8a6fa9f2d4f5601 -I "http://34.143.166.224:20443"
 ```
