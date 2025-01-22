@@ -3622,36 +3622,25 @@ impl StacksChainState {
     /// Get the coinbase at this burn block height, in microSTX
     pub fn get_coinbase_reward(burn_block_height: u64, first_burn_block_height: u64) -> u128 {
         /*
-        From https://forum.stacks.org/t/pox-consensus-and-stx-future-supply
-
-        """
-
-        1000 STX for years 0-4
-        500 STX for years 4-8
-        250 STX for years 8-12
-        125 STX in perpetuity
-
-
-        From the Token Whitepaper:
-
-        We expect that once native mining goes live, approximately 4383 blocks will be pro-
-        cessed per month, or approximately 52,596 blocks will be processed per year.
-
-        """
+        Coinbase reward adjustment:
+        - Initial reward: 35 STX
+        - Halves every 4 years (approximately 52596 blocks per year)
+        - Rewards calculated in micro-STX (1 STX = 1_000_000 micro-STX)
         */
-        // this is saturating subtraction for the initial reward calculation
-        //   where we are computing the coinbase reward for blocks that occur *before*
-        //   the `first_burn_block_height`
+        // Effective block height
         let effective_ht = burn_block_height.saturating_sub(first_burn_block_height);
         let blocks_per_year = 52596;
-        let stx_reward = if effective_ht < blocks_per_year * 4 {
-            1000
-        } else if effective_ht < blocks_per_year * 8 {
-            500
-        } else if effective_ht < blocks_per_year * 12 {
-            250
+        let halving_period_blocks = blocks_per_year * 4;
+        let initial_reward = 35;
+
+        // Calculate the halving period
+        let halving_period = effective_ht / halving_period_blocks;
+
+        // Calculate the reward based on the halving period
+        let stx_reward = if halving_period < 64 { // Prevent reward going below 1 micro-STX
+            initial_reward >> halving_period // Use bit-shift to divide by 2 for each halving
         } else {
-            125
+            0 // After 64 halvings, the reward becomes 0
         };
 
         stx_reward * (u128::from(MICROSTACKS_PER_STACKS))
@@ -5724,6 +5713,9 @@ impl StacksChainState {
             )?
             .expect("CORRUPTION: failed to load snapshot that elected processed block")
             .accumulated_coinbase_ustx;
+            if accumulated_rewards > 0 {
+                info!("Accumulated rewards: {}", accumulated_rewards);
+            }
 
             let coinbase_at_block = StacksChainState::get_coinbase_reward(
                 u64::from(chain_tip_burn_header_height),
