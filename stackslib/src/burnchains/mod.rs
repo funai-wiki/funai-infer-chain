@@ -107,7 +107,7 @@ impl BurnchainParameters {
             chain_name: "bitcoin".to_string(),
             network_name: BITCOIN_MAINNET_NAME.to_string(),
             network_id: BITCOIN_NETWORK_ID_MAINNET,
-            stable_confirmations: 1,
+            stable_confirmations: 7,
             consensus_hash_lifetime: 24,
             first_block_height: BITCOIN_MAINNET_FIRST_BLOCK_HEIGHT,
             first_block_hash: BurnchainHeaderHash::from_hex(BITCOIN_MAINNET_FIRST_BLOCK_HASH)
