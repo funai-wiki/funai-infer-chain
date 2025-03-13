@@ -8,7 +8,7 @@
 
 Overview
 
-FUN AI is a decentralized peer-to-peer (P2P) AI-generated content (AIGC) computation system that eliminates reliance on centralized AI giants. It enables users to run open-source large models (e.g., Llama 3) on personal GPUs (e.g., NVIDIA 4090), ensuring privacy, low costs, and community participation. The system uses a two-layer architecture with Proof-of-Work (PoW) and Proof-of-Inference (POI) consensus mechanisms, powered by the $FAI token (21 million total supply, zero pre-mining).
+FUN AI is a decentralized peer-to-peer (P2P) AI-generated content (AIGC) computation system that eliminates reliance on centralized AI giants. It enables users to run open-source large models (e.g., Llama 3) on personal GPUs (e.g., NVIDIA 4090), ensuring privacy, low costs, and community participation. The system uses a two-layer architecture with Proof-of-Work (PoW) and Proof-of-Inference (POI) consensus mechanisms, powered by the $FAI token (21 million total supply, zero pre-mining).This project is built on Stacks network.
 
  • Release Date: 2024-11-26
  
