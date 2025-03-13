@@ -8,7 +8,7 @@
 
 Overview
 
-FUN AI is a decentralized peer-to-peer (P2P) AI-generated content (AIGC) computation system that eliminates reliance on centralized AI giants. It enables users to run open-source large models (e.g., Llama 3) on personal GPUs (e.g., NVIDIA 4090), ensuring privacy, low costs, and community participation. The system uses a two-layer architecture with Proof-of-Work (PoW) and Proof-of-Inference (POI) consensus mechanisms, powered by the $FAI token (21 million total supply, zero pre-mining).This project is built on Stacks network.
+FUN AI is a decentralized peer-to-peer (P2P) AI-generated content (AIGC) computation system that eliminates reliance on centralized AI giants. It enables users to run open-source large models (e.g., Llama 3) on personal GPUs (e.g., NVIDIA 4090), ensuring privacy, low costs, and community participation. The system uses a two-layer architecture with Proof-of-Work (PoW) and Proof-of-Inference (POI) consensus mechanisms, powered by the $FAI token (21 million total supply, zero pre-mining).This project is built on Stacks network. 
 
  • Release Date: 2024-11-26
  
@@ -58,7 +58,7 @@ source $HOME/.cargo/env
 rustup component add rustfmt
 ```
 
-- When building the [`master`](https://github.com/stacks-network/stacks-core/tree/master) branch, ensure you are using the latest stable release:
+- When building the [`master`](https://github.com/stacks-network/stacks-core/tree/master](https://github.com/funai-wiki/funai-infer-chain/blob/master/) branch, ensure you are using the latest stable release:
 
 ```bash
 rustup update
@@ -67,8 +67,8 @@ rustup update
 ### 2. Clone the source repository:
 
 ```bash
-git clone --depth=1 https://github.com/stacks-network/stacks-core.git
-cd stacks-core
+git clone --depth=1 https://github.com/funai-wiki/funai-infer-chain.git
+cd funai-infer-chain
 ```
 
 ### 3. Build the project
@@ -115,7 +115,7 @@ You can observe the state machine in action locally by running:
 
 ```bash
 cd testnet/stacks-node
-cargo run --bin stacks-node -- start --config ./conf/testnet-follower-conf.toml
+cargo run --bin infer-node -- start --config ./conf/testnet-follower-conf.toml
 ```
 
 _On Windows, many tests will fail if the line endings aren't `LF`. Please ensure that you are have git's `core.autocrlf` set to `input` when you clone the repository to avoid any potential issues. This is due to the Clarity language currently being sensitive to line endings._
