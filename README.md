@@ -4,16 +4,47 @@
   </a>
 </p>
 
-# Stacks Blockchain
+# FunAI InferChain
 
-Reference implementation of the [Stacks blockchain](https://github.com/stacks-network/stacks) in Rust.
+Overview
 
-Stacks is a layer-2 blockchain that uses Bitcoin as a base layer for security and enables decentralized apps and predictable smart contracts using the [Clarity language](https://clarity-lang.org/). Stacks implements [Proof of Transfer (PoX)](https://community.stacks.org/pox) mining that anchors to Bitcoin security. Leader election happens at the Bitcoin blockchain and Stacks (STX) miners write new blocks on the separate Stacks blockchain. With PoX there is no need to modify Bitcoin to enable smart contracts and decentralized apps.
+FUN AI is a decentralized peer-to-peer (P2P) AI-generated content (AIGC) computation system that eliminates reliance on centralized AI giants. It enables users to run open-source large models (e.g., Llama 3) on personal GPUs (e.g., NVIDIA 4090), ensuring privacy, low costs, and community participation. The system uses a two-layer architecture with Proof-of-Work (PoW) and Proof-of-Inference (POI) consensus mechanisms, powered by the $FAI token (21 million total supply, zero pre-mining).
 
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg?style=flat)](https://www.gnu.org/licenses/gpl-3.0)
-[![Release](https://img.shields.io/github/v/release/stacks-network/stacks-core?style=flat)](https://github.com/stacks-network/stacks-core/releases/latest)
-[![Build Status](https://github.com/stacks-network/stacks-core/actions/workflows/ci.yml/badge.svg?branch=master&event=workflow_dispatch&style=flat)](https://github.com/stacks-network/stacks-core/actions/workflows/ci.yml?query=event%3Aworkflow_dispatch+branch%3Amaster)
-[![Discord Chat](https://img.shields.io/discord/621759717756370964.svg)](https://stacks.chat)
+ • Release Date: 2024-11-26
+ 
+ • Goal: Provide a fair, open AI network addressing privacy, cost, and manipulation issues.
+
+Core Features
+
+ • Decentralized P2P inference with privacy protection via blockchain and disk recycling.
+ 
+ • Supports any open-source large model with multi-model compatibility.
+ 
+ • Incentivizes participation with $FAI rewards for inference and verification nodes.
+
+Architecture
+
+ • Ledger Layer: Uses Bitcoin-style PoW for security and transaction recording.
+ 
+ • Inference Layer: Employs POI with inference and verification nodes.
+ 
+ • Communication: Enabled by the Clarity virtual machine.
+
+Workflow
+
+ • Users submit inference tasks; nodes process and broadcast results.
+ 
+ • Inference nodes are elected via $FAI bids and verifiable random functions (VRF).
+ 
+ • Verification nodes (top $FAI stakers) validate results and distribute rewards.
+
+Incentives
+
+ • Ledger Layer: 1.5 $FAI per block.
+ 
+ • Inference Layer: 3.5 $FAI per block.
+ 
+ • Rewards halve every 21 million blocks.
 
 ## Building
 
