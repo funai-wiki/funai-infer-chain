@@ -1,6 +1,6 @@
 <p align="left">
-  <a href="https://stacks.co">
-    <img alt="Stacks" src="https://i.imgur.com/zzwnCnY.png" width="250" />
+  <a href="https://github.com/funai-wiki/funai-infer-chain/blob/master/docs/resource/e6a63b32f7849.png">
+    <img alt="Stacks" src="https://github.com/funai-wiki/funai-infer-chain/blob/master/docs/resource/e6a63b32f7849.png" width="250" />
   </a>
 </p>
 
