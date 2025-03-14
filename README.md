@@ -9,8 +9,6 @@
 Overview
 
 FUN AI is a decentralized peer-to-peer (P2P) AI-generated content (AIGC) computation system that eliminates reliance on centralized AI giants. It enables users to run open-source large models (e.g., Llama 3) on personal GPUs (e.g., NVIDIA 4090), ensuring privacy, low costs, and community participation. The system uses a two-layer architecture with Proof-of-Work (PoW) and Proof-of-Inference (POI) consensus mechanisms, powered by the $FAI token (21 million total supply, zero pre-mining).This project is built on Stacks network. 
-
- • Release Date: 2024-11-26
  
  • Goal: Provide a fair, open AI network addressing privacy, cost, and manipulation issues.
 
@@ -125,22 +123,6 @@ Additional testnet documentation is available [here](./docs/testnet.md) and [her
 ## Release Process
 
 The release process for the stacks blockchain is [defined here](./docs/release-process.md)
-
-## Further Reading
-
-You can learn more by visiting [the Stacks Website](https://stacks.co) and checking out the documentation:
-
-- [Stacks docs](https://docs.stacks.co/)
-- [Stacks Improvement Proposals (SIPs)](./docs/SIPS.md)
-- [Mining](./docs/mining.md)
-- [Profiling](./docs/profiling.md)
-- [RPC endpoints](./docs/rpc-endpoints.md)
-- [Event dispatcher](./docs/event-dispatcher.md)
-
-You can also read the technical papers:
-
-- ["PoX: Proof of Transfer Mining with Bitcoin"](https://community.stacks.org/pox), May 2020
-- ["Stacks 2.0: Apps and Smart Contracts for Bitcoin"](https://stacks.org/stacks), Dec 2020
 
 ## Copyright and License
 
