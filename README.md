@@ -120,6 +120,10 @@ _On Windows, many tests will fail if the line endings aren't `LF`. Please ensure
 
 Additional testnet documentation is available [here](./docs/testnet.md) and [here](https://docs.stacks.co/docs/nodes-and-miners/miner-testnet)
 
+## FunAI Mining
+
+Please refer to this document for mining: [funai-mining](https://github.com/funai-wiki/funai-infer-chain/blob/master/funai-mining.md)
+
 ## Release Process
 
 The release process for the stacks blockchain is [defined here](./docs/release-process.md)
