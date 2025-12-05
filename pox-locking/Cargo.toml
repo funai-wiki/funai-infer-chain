@@ -1,0 +1,27 @@
+[package]
+name = "pox-locking"
+version = "2.4.0"
+authors = [ "Jude Nelson <jude@funai.org>",
+            "Aaron Blankstein <aaron@blockstack.com>",
+            "Ludo Galabru <ludovic@blockstack.com>" ]
+license = "GPLv3"
+homepage = "https://github.com/blockstack/funai-blockchain"
+repository = "https://github.com/blockstack/funai-blockchain"
+description = "Contract call result handler for applying PoX lock operations"
+keywords = [ "funai", "stx", "bitcoin", "crypto", "blockstack", "decentralized", "dapps", "blockchain" ]
+readme = "README.md"
+resolver = "2"
+edition = "2021"
+rust-version = "1.61"
+
+[lib]
+name = "pox_locking"
+path = "src/lib.rs"
+
+[dependencies]
+clarity = { package = "clarity", path = "../clarity" }
+funai_common = { package = "funai-common", path = "../funai-common" }
+slog = { version = "2.5.2", features = [ "max_level_trace" ] }
+
+[features]
+slog_json = ["funai_common/slog_json", "clarity/slog_json"]

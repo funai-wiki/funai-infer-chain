@@ -1,0 +1,33 @@
+[package]
+name = "libfunaidb"
+version = "0.0.1"
+authors = [ "Jude Nelson <jude@funai.org>" ]
+license = "GPLv3"
+homepage = "https://github.com/blockstack/funai-blockchain"
+repository = "https://github.com/blockstack/funai-blockchain"
+description = "Client library for the FunaiDB subsystem"
+keywords = [ "funai", "stx", "bitcoin", "crypto", "blockstack", "decentralized", "dapps", "blockchain" ]
+readme = "README.md"
+resolver = "2"
+edition = "2021"
+
+[lib]
+name = "libfunaidb"
+path = "./src/libfunaidb.rs"
+
+[dependencies]
+serde = "1"
+serde_derive = "1"
+serde_funai = { package = "serde_stacker", version = "0.1" }
+funai-common = { path = "../funai-common" }
+clarity = { path = "../clarity" }
+
+[dependencies.secp256k1]
+version = "0.24.3"
+features = ["serde", "recovery"]
+
+[target.'cfg(all(any(target_arch = "x86_64", target_arch = "x86", target_arch = "aarch64"), not(any(target_os="windows"))))'.dependencies]
+sha2 = { version = "0.10", features = ["asm"] }
+
+[target.'cfg(any(not(any(target_arch = "x86_64", target_arch = "x86", target_arch = "aarch64")), any(target_os = "windows")))'.dependencies]
+sha2 = { version = "0.10" }

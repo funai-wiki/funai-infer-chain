@@ -1,0 +1,44 @@
+[node]
+working_dir = "/Users/bj89200ml/Documents/llm_chain_local"
+rpc_bind = "0.0.0.0:20443"
+p2p_bind = "0.0.0.0:20444"
+seed = "ad552104f8aec1dbf83d6d18c2fb7398695a6fae198fedf241848aeb8ea3c19b01"
+local_peer_seed = "ad552104f8aec1dbf83d6d18c2fb7398695a6fae198fedf241848aeb8ea3c19b01"
+miner = true
+wait_time_for_microblocks = 1000000
+use_test_genesis_chainstate = true
+miner_endpoint = "https://dml-test.chainservice.io"
+
+[connection_options]
+public_ip_address = "127.0.0.1:20444"
+block_proposal_token = "123456"
+
+[burnchain]
+chain = "bitcoin"
+mode = "mocknet"
+
+[[events_observer]]
+endpoint = "127.0.0.1:30000"
+retry_count = 255
+include_data_events = false
+events_keys = ["*"]
+
+[[ustx_balance]]
+address = "ST2QKZ4FKHAH1NQKYKYAYZPY440FEPK7GZ1R5HBP2"
+amount = 10000000000000000
+
+[[ustx_balance]]
+address = "ST319CF5WV77KYR1H3GT0GZ7B8Q4AQPY42ETP1VPF"
+amount = 10000000000000000
+
+[[ustx_balance]]
+address = "ST221Z6TDTC5E0BYR2V624Q2ST6R0Q71T78WTAX6H"
+amount = 10000000000000000
+
+[[ustx_balance]]
+address = "ST2TFVBMRPS5SSNP98DQKQ5JNB2B6NZM91C4K3P7B"
+amount = 10000000000000000
+
+[[ustx_balance]]
+address = "ST32DXFDST50QS8FV3NMRJQCGX5R5BSADTJDTHVHW"
+amount = 90000000000000000

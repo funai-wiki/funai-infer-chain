@@ -1,0 +1,26 @@
+# The IP address and port where your Funai node can be accessed.
+# The port 20443 is the default RPC endpoint for Funai nodes.
+# Note that you must use an IP address - DNS hosts are not supported at this time.
+# This should be the IP address accessible via Docker, usually via a network.
+node_host = "127.0.0.1:20443"
+
+# This is the location where the signer will expose an RPC endpoint for
+# receiving events from your Funai node.
+endpoint = "0.0.0.0:30000"
+
+# Either “testnet” or “mainnet”
+network = "testnet"
+
+# this is a file path where your signer will persist data. If using Docker,
+# this must be within a volume, so that data can be persisted across restarts
+db_path = "/data/llm_signer_local/signer.db"
+
+# an authentication token that is used for some HTTP requests made from the
+# signer to your Funai node. You’ll need to use this later on when configur$ng
+# your Funai node. You create this field yourself, rather than it being generated
+# with your private key.
+auth_password = ""
+
+# This is the privateKey field from the keys you generated in the
+# previous step.
+funai_private_key = ""

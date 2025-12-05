@@ -1,0 +1,69 @@
+[package]
+name = "funai-node"
+version = "0.1.0"
+authors = ["Jude Nelson <jude@funai.org>", "Aaron Blankstein <aaron@blockstack.com>", "Ludo Galabru <ludovic@blockstack.com>"]
+edition = "2021"
+resolver = "2"
+rust-version = "1.61"
+
+[dependencies]
+lazy_static = "1.4.0"
+pico-args = "0.5.0"
+serde = "1"
+serde_derive = "1"
+serde_json = { version = "1.0", features = ["arbitrary_precision", "raw_value"] }
+funai = { package = "funailib", path = "../../funailib" }
+funai-genesis = { path = "../../funai-genesis"}
+toml = "0.5.6"
+async-h1 = "2.3.2"
+async-std = { version = "1.6", features = ["attributes"] }
+http-types = "2.12"
+base64 = "0.12.0"
+backtrace = "0.3.50"
+libc = "0.2.151"
+slog = { version = "2.5.2", features = [ "max_level_trace" ] }
+clarity = { path = "../../clarity" }
+funai-common = { path = "../../funai-common" }
+chrono = "0.4.19"
+regex = "1"
+libsigner = { path = "../../libsigner" }
+libllm = { path = "../../libllm" }
+wsts = { workspace = true }
+rand = { workspace = true }
+rand_core = { workspace = true }
+hashbrown = { workspace = true }
+
+[target.'cfg(not(any(target_os = "macos", target_os="windows", target_arch = "arm")))'.dependencies]
+tikv-jemallocator = {workspace = true}
+
+[dev-dependencies]
+ring = "0.16.19"
+warp = "0.3.5"
+tokio = "1.15"
+reqwest = { version = "0.11", default_features = false, features = ["blocking", "json", "rustls", "rustls-tls"] }
+clarity = { path = "../../clarity", features = ["default", "testing"]}
+funai-common = { path = "../../funai-common", features = ["default", "testing"] }
+funai = { package = "funailib", path = "../../funailib", features = ["default", "testing"] }
+funai-signer = { path = "../../funai-signer" }
+tracing = "0.1.37"
+tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
+wsts = {workspace = true}
+mutants = "0.0.3"
+
+[dependencies.rusqlite]
+version = "=0.24.2"
+features = ["blob", "serde_json", "i128_blob", "bundled", "trace"]
+
+[[bin]]
+name = "infer-node"
+path = "src/main.rs"
+
+[[bin]]
+name = "infer-events"
+path = "src/funai_events.rs"
+
+[features]
+monitoring_prom = ["funai/monitoring_prom"]
+slog_json = ["funai/slog_json", "funai-common/slog_json", "clarity/slog_json"]
+prod-genesis-chainstate = []
+default = []

@@ -1,0 +1,31 @@
+[node]
+working_dir = "/llm_chain_local"
+rpc_bind = "0.0.0.0:20443"
+p2p_bind = "0.0.0.0:20444"
+seed = ""
+local_peer_seed = ""
+miner = true
+wait_time_for_microblocks = 1000
+miner_endpoint = "http://127.0.0.1:20443"
+
+[burnchain]
+chain = "bitcoin"
+mode = "mainnet"
+peer_host = ""
+username = ""
+password = ""
+rpc_port = 8332
+peer_port = 8333
+wallet_name = "miner"
+
+[connection_options]
+block_proposal_token = "123456"
+
+[miner]
+mining_key = ""
+
+[[events_observer]]
+endpoint = "127.0.0.1:30000"
+retry_count = 255
+include_data_events = false
+events_keys = ["*","funaidb","block_proposal"]
