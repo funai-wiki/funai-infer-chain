@@ -12,12 +12,19 @@ RUN apk add --no-cache musl-dev
 
 RUN mkdir /out
 
-RUN cd testnet/stacks-node && cargo build --features monitoring_prom,slog_json --release
+RUN cargo build --bin infer-node --features monitoring_prom,slog_json --release
 
-RUN cp target/release/stacks-node /out
+RUN cp target/release/infer-node /out
 
 FROM alpine
 
-COPY --from=build /out/ /bin/
+COPY --from=build /out/infer-node /bin/infer-node
 
-CMD ["stacks-node", "mainnet"]
+# Copy configuration file
+COPY testnet/funai-node/conf/fai-testnet-miner-conf.toml /etc/infer-chain/fai-testnet-miner-conf.toml
+
+# Set environment variables
+ENV STACKS_LOG_INFO=1
+ENV BLOCKSTACK_DB_TRACE=0
+
+CMD ["infer-node", "start", "--config", "/etc/infer-chain/fai-testnet-miner-conf.toml"]
