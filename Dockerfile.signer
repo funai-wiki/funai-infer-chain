@@ -1,4 +1,4 @@
-FROM rust:alpine as build
+FROM rust:alpine AS build
 
 ARG STACKS_NODE_VERSION="No Version Info"
 ARG GIT_BRANCH='No Branch Info'
@@ -6,9 +6,16 @@ ARG GIT_COMMIT='No Commit Info'
 
 WORKDIR /src
 
-COPY . .
+# Install build dependencies
+RUN apk add --no-cache \
+    musl-dev \
+    openssl-dev \
+    pkgconfig \
+    perl \
+    make \
+    g++
 
-RUN apk add --no-cache musl-dev
+COPY . .
 
 RUN mkdir /out
 
@@ -18,10 +25,15 @@ RUN cp target/release/infer-signer /out
 
 FROM alpine
 
+# Install runtime dependencies
+RUN apk add --no-cache \
+    ca-certificates \
+    libgcc
+
 COPY --from=build /out/infer-signer /bin/infer-signer
 
 # Copy configuration file
-COPY testnet/funai-node/conf/fai-testnet-signer-config.toml /etc/infer-chain/fai-testnet-signer-config.toml
+COPY testnet/funai-node/conf/fai-testnet-signer-config.toml.not_commit /etc/infer-chain/fai-testnet-signer-config.toml
 
 # Set environment variables
 ENV STACKS_LOG_INFO=1
