@@ -120,6 +120,60 @@ _On Windows, many tests will fail if the line endings aren't `LF`. Please ensure
 
 Additional testnet documentation is available [here](./docs/testnet.md)
 
+## Docker
+
+### Build
+- Release-lite (recommended): `docker build -t infer-node:latest -f Dockerfile .`
+- Signer: `docker build -t infer-signer:latest -f Dockerfile.signer .`
+- Dev (fastest, no optimizations): `docker build -t infer-node:dev -f Dockerfile.dev .`
+
+Signer build (expanded):
+```bash
+docker build -t infer-signer:latest -f Dockerfile.signer .
+```
+
+### Run infer-node
+```bash
+docker run -d \
+  --name infer-node \
+  -p 20443:20443 \
+  -p 20444:20444 \
+  -v /usr/local/data/llm_chain_local/testnet:/usr/local/data/llm_chain_local/testnet \
+  infer-node:latest
+```
+- Default config in image: `/etc/infer-chain/fai-testnet-miner-conf.toml` (not_commit version copied).
+- Env vars already set: `STACKS_LOG_INFO=1`, `BLOCKSTACK_DB_TRACE=0`.
+- If you prefer storing data under home: `mkdir -p ~/infer-chain-data/node` then mount `-v ~/infer-chain-data/node:/usr/local/data/llm_chain_local/testnet`.
+
+### Run infer-signer
+```bash
+docker run -d \
+  --name infer-signer \
+  -p 30000:30000 \
+  -v /usr/local/data/llm_signer_local/testnet:/usr/local/data/llm_signer_local/testnet \
+  infer-signer:latest
+```
+- Default config: `/etc/infer-chain/fai-testnet-signer-config.toml`; for persistence you can mount `~/infer-chain-data/signer:/usr/local/data/llm_signer_local/testnet`.
+
+### Build tips
+- Slow first build is normal; you can use BuildKit cache:
+  ```
+  mkdir -p .docker-cache
+  docker buildx build --progress=plain \
+    --cache-from type=local,src=.docker-cache \
+    --cache-to   type=local,dest=.docker-cache,mode=max \
+    -t infer-node:latest -f Dockerfile .
+  ```
+- Signer BuildKit cache example:
+  ```
+  mkdir -p .docker-cache
+  docker buildx build --progress=plain \
+    --cache-from type=local,src=.docker-cache \
+    --cache-to   type=local,dest=.docker-cache,mode=max \
+    -t infer-signer:latest -f Dockerfile.signer .
+  ```
+- For fastest iteration use `Dockerfile.dev` (no optimizations).
+
 ## FunAI Mining
 
 Please refer to this document for mining: [funai-mining](https://github.com/funai-wiki/funai-infer-chain/blob/master/funai-mining.md)
