@@ -40,11 +40,11 @@ fn parse_pox_stacking_result_v1(
         .expect("FATAL: unexpected clarity value")
     {
         Ok(res) => {
-            // should have gotten back (ok (tuple (stacker principal) (lock-amount uint) (unlock-burn-height uint)))
+            // should have gotten back (ok (tuple (funai principal) (lock-amount uint) (unlock-burn-height uint)))
             let tuple_data = res.expect_tuple().expect("FATAL: unexpected clarity value");
             let stacker = tuple_data
-                .get("stacker")
-                .expect("FATAL: no 'stacker'")
+                .get("funai")
+                .expect("FATAL: no 'funai'")
                 .to_owned()
                 .expect_principal()
                 .expect("FATAL: unexpected clarity value");
@@ -76,7 +76,7 @@ fn parse_pox_stacking_result_v1(
 pub fn is_read_only(func_name: &str) -> bool {
     func_name == "get-pox-rejection"
         || func_name == "is-pox-active"
-        || func_name == "get-stacker-info"
+        || func_name == "get-funai-info"
         || func_name == "get-reward-set-size"
         || func_name == "get-total-ustx-stacked"
         || func_name == "get-reward-set-pox-address"

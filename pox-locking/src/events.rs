@@ -54,22 +54,22 @@ fn create_event_info_stack_or_delegate_code(
     format!(
         r#"
         (let (
-            (stacker '{stacker})
+            (funai '{stacker})
             (func-name "{func_name}")
-            (stacker-info (stx-account stacker))
+            (funai-info (stx-account stacker))
             (total-balance (stx-get-balance stacker))
         )
             {{
                 ;; Function name
                 name: func-name,
                 ;; The principal of the stacker
-                stacker: stacker,
+                funai: stacker,
                 ;; The current available balance
                 balance: total-balance,
                 ;; The amount of locked STX
-                locked: (get locked stacker-info),
+                locked: (get locked funai-info),
                 ;; The burnchain block height of when the tokens unlock. Zero if no tokens are locked.
-                burnchain-unlock-height: (get unlock-height stacker-info),
+                burnchain-unlock-height: (get unlock-height funai-info),
             }}
         )
         "#,
@@ -83,7 +83,7 @@ fn create_event_info_aggregation_code(function_name: &str) -> String {
     format!(
         r#"
         (let (
-            (stacker-info (stx-account tx-sender))
+            (funai-info (stx-account tx-sender))
         )
             {{
                 ;; Function name
@@ -93,10 +93,10 @@ fn create_event_info_aggregation_code(function_name: &str) -> String {
                 ;; Even though tx-sender is *not* a stacker, the field is
                 ;; called "stacker" and these clients know to treat it as
                 ;; the delegator.
-                stacker: tx-sender,
+                funai: tx-sender,
                 balance: (stx-get-balance tx-sender),
-                locked: (get locked stacker-info),
-                burnchain-unlock-height: (get unlock-height stacker-info),
+                locked: (get locked funai-info),
+                burnchain-unlock-height: (get unlock-height funai-info),
 
             }}
         )
@@ -202,7 +202,7 @@ fn create_event_info_data_code(
                         delegator: tx-sender,
                         ;; stacker
                         ;; equal to args[0]
-                        stacker: '{stacker},
+                        funai: '{stacker},
                         ;; Get end cycle ID
                         end-cycle-id: (some (burn-height-to-reward-cycle unlock-burn-height)),
                         ;; Get start cycle ID
@@ -235,7 +235,7 @@ fn create_event_info_data_code(
                         ;; derived from args[0]
                         total-locked: (+ {increase_by} (get locked (stx-account tx-sender))),
                         ;; pox addr increased
-                        pox-addr: (get pox-addr (unwrap-panic (map-get? stacking-state {{ stacker: tx-sender }}))),
+                        pox-addr: (get pox-addr (unwrap-panic (map-get? stacking-state {{ funai: tx-sender }}))),
                         ;; signer sig (args[1])
                         signer-sig: {signer_sig},
                         ;; signer key (args[2])
@@ -282,7 +282,7 @@ fn create_event_info_data_code(
                         delegator: tx-sender,
                         ;; stacker
                         ;; equal to args[0]
-                        stacker: '{stacker},
+                        funai: '{stacker},
                         ;; Get end cycle ID
                         end-cycle-id: (some (burn-height-to-reward-cycle unlock-height)),
                         ;; Get start cycle ID
@@ -375,7 +375,7 @@ fn create_event_info_data_code(
                         delegator: tx-sender,
                         ;; stacker
                         ;; equal to args[0]
-                        stacker: '{stacker},
+                        funai: '{stacker},
                         ;; Get end cycle ID
                         end-cycle-id: (some (burn-height-to-reward-cycle new-unlock-ht)),
                         ;; Get start cycle ID

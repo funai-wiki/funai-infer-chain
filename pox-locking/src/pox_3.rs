@@ -40,7 +40,7 @@ pub(crate) fn is_read_only(func_name: &str) -> bool {
         || "burn-height-to-reward-cycle" == func_name
         || "reward-cycle-to-burn-height" == func_name
         || "current-pox-reward-cycle" == func_name
-        || "get-stacker-info" == func_name
+        || "get-funai-info" == func_name
         || "get-check-delegation" == func_name
         || "get-reward-set-size" == func_name
         || "next-cycle-rejection-votes" == func_name

@@ -36,7 +36,7 @@ pub fn is_read_only(func_name: &str) -> bool {
         || "burn-height-to-reward-cycle" == func_name
         || "reward-cycle-to-burn-height" == func_name
         || "current-pox-reward-cycle" == func_name
-        || "get-stacker-info" == func_name
+        || "get-funai-info" == func_name
         || "get-check-delegation" == func_name
         || "get-reward-set-size" == func_name
         || "next-cycle-rejection-votes" == func_name
@@ -68,11 +68,11 @@ pub fn parse_pox_stacking_result(
         .expect("FATAL: unexpected clarity value")
     {
         Ok(res) => {
-            // should have gotten back (ok { stacker: principal, lock-amount: uint, unlock-burn-height: uint .. } .. })))
+            // should have gotten back (ok { funai: principal, lock-amount: uint, unlock-burn-height: uint .. } .. })))
             let tuple_data = res.expect_tuple().expect("FATAL: unexpected clarity value");
             let stacker = tuple_data
-                .get("stacker")
-                .expect("FATAL: no 'stacker'")
+                .get("funai")
+                .expect("FATAL: no 'funai'")
                 .to_owned()
                 .expect_principal()
                 .expect("FATAL: unexpected clarity value");
@@ -109,11 +109,11 @@ pub fn parse_pox_extend_result(result: &Value) -> std::result::Result<(Principal
         .expect("FATAL: unexpected clarity value")
     {
         Ok(res) => {
-            // should have gotten back (ok { stacker: principal, unlock-burn-height: uint .. } .. })
+            // should have gotten back (ok { funai: principal, unlock-burn-height: uint .. } .. })
             let tuple_data = res.expect_tuple().expect("FATAL: unexpected clarity value");
             let stacker = tuple_data
-                .get("stacker")
-                .expect("FATAL: no 'stacker'")
+                .get("funai")
+                .expect("FATAL: no 'funai'")
                 .to_owned()
                 .expect_principal()
                 .expect("FATAL: unexpected clarity value");
@@ -144,11 +144,11 @@ pub fn parse_pox_increase(result: &Value) -> std::result::Result<(PrincipalData,
         .expect("FATAL: unexpected clarity value")
     {
         Ok(res) => {
-            // should have gotten back (ok { stacker: principal, total-locked: uint .. } .. })
+            // should have gotten back (ok { funai: principal, total-locked: uint .. } .. })
             let tuple_data = res.expect_tuple().expect("FATAL: unexpected clarity value");
             let stacker = tuple_data
-                .get("stacker")
-                .expect("FATAL: no 'stacker'")
+                .get("funai")
+                .expect("FATAL: no 'funai'")
                 .to_owned()
                 .expect_principal()
                 .expect("FATAL: unexpected clarity value");
