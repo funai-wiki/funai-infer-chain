@@ -50,14 +50,14 @@ fn create_event_info_stack_or_delegate_code(
         (let (
             (funai '{stacker})
             (func-name "{func_name}")
-            (funai-info (stx-account stacker))
-            (total-balance (stx-get-balance stacker))
+            (funai-info (stx-account funai))
+            (total-balance (stx-get-balance funai))
         )
             {{
                 ;; Function name
                 name: func-name,
                 ;; The principal of the stacker
-                funai: stacker,
+                funai: funai,
                 ;; The current available balance
                 balance: total-balance,
                 ;; The amount of locked STX
