@@ -883,7 +883,7 @@ impl Signer {
             Ok(Some(miner_endpoint)) => {
                 for tx in block.txs.iter() {
                     match &tx.payload {
-                        TransactionPayload::Infer(_from, _amount, input, context, _node_principal) => {
+                        TransactionPayload::Infer(_from, _amount, input, context, _node_principal, _model_name) => {
                             let txid = tx.txid().to_string();
                             let infer_res = funai_client
                                 .get_infer_res_with_retry(txid.clone(), miner_endpoint.clone());

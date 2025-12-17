@@ -247,7 +247,7 @@ impl RPCRequestHandler for RPCPostTransactionRequestHandler {
             };
 
             match tx.payload {
-                TransactionPayload::Infer(_, _, ref userInput, ref context, _) => { // submit infer task to local llm server if the tx type is infer
+                TransactionPayload::Infer(_, _, ref userInput, ref context, _, _) => { // submit infer task to local llm server if the tx type is infer
                     let txid_str = txid.to_hex();
                     let user_input = userInput.to_string();
                     let context_str = context.to_string();

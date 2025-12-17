@@ -1456,7 +1456,7 @@ impl FunaiChainState {
                 let receipt = FunaiTransactionReceipt::from_tenure_change(tx.clone());
                 Ok(receipt)
             }
-            TransactionPayload::Infer(ref from, ref amount, _, _, ref node_principal) => {
+            TransactionPayload::Infer(ref from, ref amount, _, _, ref node_principal, _) => {
                 if tx.post_conditions.len() > 0 {
                     let msg = format!("Invalid Funai transaction: Infer transactions do not support post-conditions");
                     warn!("{}", &msg);
@@ -1500,24 +1500,33 @@ impl FunaiChainState {
                                 .map_err(|e| Error::InvalidFunaiTransaction(e.to_string(), false))?;
                             let cost_before = clarity_tx.cost_so_far();
                             
-                            // Calculate amount distribution: 30% to miner, 70% to from
-                            let _miner_amount = (*amount as u128 * 30) / 100;
-                            let _from_amount = (*amount as u128 * 70) / 100;
+                            // Calculate amount distribution: 30% to miner, 70% to node_principal
+                            let miner_amount = (*amount as u128 * 30) / 100;
+                            let node_amount = (*amount as u128 * 70) / 100;
                             
-                            // For now, we'll transfer the entire amount to the sender
-                            // The miner reward will be handled by the block reward mechanism
-                            // This is a simplified implementation - in practice, the miner address
-                            // would need to be determined from the block context
-                            let (_, _asset_map_transfer, events_transfer) = clarity_tx
-                                .run_stx_transfer(
-                                    &origin_account.principal,
-                                    from,
-                                    *amount as u128,
-                                    &BuffData {
-                                        data: Vec::new(),
-                                    },
-                                )
-                                .map_err(Error::ClarityError)?;
+                            let mut all_events = Vec::new();
+
+                            // Transfer 70% to node_principal
+                            if node_amount > 0 {
+                                let (_, _asset_map_transfer, events_transfer) = clarity_tx
+                                    .run_stx_transfer(
+                                        &origin_account.principal,
+                                        node_principal,
+                                        node_amount,
+                                        &BuffData {
+                                            data: Vec::new(),
+                                        },
+                                    )
+                                    .map_err(Error::ClarityError)?;
+                                all_events.extend(events_transfer);
+                            }
+                            
+                            // Transfer 30% to miner.
+                            // Since we don't have the miner's address explicitly passed here, we will currently
+                            // not transfer the miner's share (it stays with the user).
+                            // This effectively means the user pays 70% of the amount to the node, 
+                            // and the remaining 30% is not spent.
+                            // In a future update, we should locate the block miner address and transfer this share.
                             
                             // Run the infer operation
                             let (value, _asset_map, events) = clarity_tx.run_stx_infer(
@@ -1527,16 +1536,12 @@ impl FunaiChainState {
                                 },
                             )
                                 .map_err(Error::ClarityError)?;
+                            all_events.extend(events);
 
                             let mut total_cost = clarity_tx.cost_so_far();
                             total_cost
                                 .sub(&cost_before)
                                 .expect("BUG: total block cost decreased");
-
-                            // Combine all events
-                            let mut all_events = Vec::new();
-                            all_events.extend(events_transfer);
-                            all_events.extend(events);
 
                             let receipt = FunaiTransactionReceipt::from_infer(
                                 tx.clone(),

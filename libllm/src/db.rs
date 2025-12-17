@@ -22,7 +22,21 @@ pub struct ResultRow {
     pub end_time: String
 }
 
-pub const LLM_DB_PATH: &str = "./llm.sqlite";
+use std::sync::RwLock;
+use lazy_static::lazy_static;
+
+lazy_static! {
+    static ref LLM_DB_PATH: RwLock<String> = RwLock::new("./llm.sqlite".to_string());
+}
+
+pub fn set_db_path(path: String) {
+    let mut db_path = LLM_DB_PATH.write().unwrap();
+    *db_path = path;
+}
+
+pub fn get_db_path() -> String {
+    LLM_DB_PATH.read().unwrap().clone()
+}
 
 pub fn initialize_conn(conn: &Connection) -> Result<(), Box<dyn error::Error>> {
     conn.query_row("PRAGMA journal_mode = WAL;", NO_PARAMS, |_row| Ok(()))?;

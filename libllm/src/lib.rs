@@ -239,17 +239,21 @@ pub struct InferResult {
 }
 
 
+pub fn set_db_path(path: String) {
+    db::set_db_path(path);
+}
+
 #[allow(unused_variables)]
 pub fn infer_chain(txid: String, user_input: &str, context_messages: Option<Vec<ChatCompletionMessage>>) -> Result<InferStatus, Box<dyn error::Error>> {
     println!("infer_chain txid: {} user_input: {}", txid, user_input);
-    let llm_db = db::open(db::LLM_DB_PATH)?;
+    let llm_db = db::open(db::get_db_path().as_str())?;
     let _ = db::sqlite_create(&llm_db, &txid.as_str(), &"", user_input, InferStatus::Created as u8)?;
     Ok(InferStatus::Created)
 }
 
 
 pub fn query(txid: String) -> Result<InferResult, Box<dyn error::Error>> {
-    let llm_db = db::open(db::LLM_DB_PATH)?;
+    let llm_db = db::open(db::get_db_path().as_str())?;
     let result = db::sqlite_get(&llm_db, &txid.as_str())?;
     Ok(InferResult{
         txid: result.txid,
@@ -261,7 +265,7 @@ pub fn query(txid: String) -> Result<InferResult, Box<dyn error::Error>> {
 }
 
 pub fn query_hash(txid: String) -> Result<InferResult, Box<dyn error::Error>> {
-    let llm_db = db::open(db::LLM_DB_PATH)?;
+    let llm_db = db::open(db::get_db_path().as_str())?;
     let result = db::sqlite_get(&llm_db, &txid.as_str())?;
     Ok(InferResult{
         txid: result.txid,
@@ -275,7 +279,7 @@ pub fn query_hash(txid: String) -> Result<InferResult, Box<dyn error::Error>> {
 pub async fn _internal_do_infer() -> Result<(), Box<dyn error::Error>>{
     // todo llm infer
     // 0. open connection
-    let llm_db = db::open(db::LLM_DB_PATH)?;
+    let llm_db = db::open(db::get_db_path().as_str())?;
     // 1. get to_do infer row
     let row = db::sqlite_filter_to_infer(&llm_db)?;
     // 2. do infer
@@ -301,7 +305,7 @@ pub fn do_infer() -> Result<(), Box<dyn error::Error>>{
 /// Register a model by name with parameters if it does not already exist.
 /// Returns Ok(true) if inserted, Ok(false) if already existed.
 pub fn register_model_if_absent(name: &str, params: &str) -> Result<bool, Box<dyn error::Error>> {
-    let llm_db = db::open(db::LLM_DB_PATH)?;
+    let llm_db = db::open(db::get_db_path().as_str())?;
     // use result_table to store models in a simple way: txid=name, context=params
     // check existence
     let exist = db::sqlite_get(&llm_db, name).is_ok();

@@ -283,13 +283,14 @@ impl FunaiMessageCodec for TransactionPayload {
                 write_next(fd, &(TransactionPayloadID::TenureChange as u8))?;
                 tc.consensus_serialize(fd)?;
             }
-            TransactionPayload::Infer(address, amount, userInput, context, node_principal) => {
+            TransactionPayload::Infer(address, amount, userInput, context, node_principal, model_name) => {
                 write_next(fd, &(TransactionPayloadID::Infer as u8))?;
                 write_next(fd, address)?;
                 write_next(fd, amount)?;
                 write_next(fd, userInput)?;
                 write_next(fd, context)?;
                 write_next(fd, node_principal)?;
+                write_next(fd, model_name)?;
             }
             TransactionPayload::RegisterModel(model_name, model_params) => {
                 write_next(fd, &(TransactionPayloadID::RegisterModel as u8))?;
@@ -394,7 +395,8 @@ impl FunaiMessageCodec for TransactionPayload {
                 let user_input: InferLPString = read_next(fd)?;
                 let context: InferLPString = read_next(fd)?;
                 let node_principal: PrincipalData = read_next(fd)?;
-                TransactionPayload::Infer(principal, amount, user_input, context, node_principal)
+                let model_name: InferLPString = read_next(fd)?;
+                TransactionPayload::Infer(principal, amount, user_input, context, node_principal, model_name)
             }
             TransactionPayloadID::RegisterModel => {
                 let model_name: InferLPString = read_next(fd)?;
@@ -1726,8 +1728,8 @@ mod test {
                 };
                 TransactionPayload::TenureChange(corrupt_tc)
             }
-            TransactionPayload::Infer(ref addr, ref amount, ref user_input, ref context, ref node) => {
-                TransactionPayload::Infer(addr.clone(), *amount, user_input.clone(), context.clone(), node.clone())
+            TransactionPayload::Infer(ref addr, ref amount, ref user_input, ref context, ref node, ref model) => {
+                TransactionPayload::Infer(addr.clone(), *amount, user_input.clone(), context.clone(), node.clone(), model.clone())
             }
             TransactionPayload::RegisterModel(ref name, ref params) => {
                 TransactionPayload::RegisterModel(name.clone(), params.clone())

@@ -781,7 +781,7 @@ pub enum TransactionPayload {
     PoisonMicroblock(FunaiMicroblockHeader, FunaiMicroblockHeader),
     Coinbase(CoinbasePayload, Option<PrincipalData>, Option<VRFProof>),
     TenureChange(TenureChangePayload),
-    Infer(PrincipalData, u64, InferLPString, InferLPString, PrincipalData), // user, amount, userInput, context, node_principal
+    Infer(PrincipalData, u64, InferLPString, InferLPString, PrincipalData, InferLPString), // user, amount, userInput, context, node_principal, model_name
     // register a new inference model on-chain (name, params)
     RegisterModel(InferLPString, InferLPString),
 }

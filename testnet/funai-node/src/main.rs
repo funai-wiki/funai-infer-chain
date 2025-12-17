@@ -424,6 +424,10 @@ fn main() {
         }
     };
 
+    // Set libllm DB path based on config working_dir
+    let llm_db_path = format!("{}/llm.sqlite", conf.node.working_dir);
+    libllm::set_db_path(llm_db_path);
+
     debug!("node configuration {:?}", &conf.node);
     debug!("burnchain configuration {:?}", &conf.burnchain);
     debug!("connection configuration {:?}", &conf.connection_options);

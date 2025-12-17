@@ -6758,7 +6758,7 @@ impl FunaiChainState {
 
         // 6: payload-specific checks
         match &tx.payload {
-            TransactionPayload::Infer(from, amount, user_input, context, node_principal) => {
+            TransactionPayload::Infer(from, amount, user_input, context, node_principal, model_name) => {
                 // TODO do some infer check
             }
             TransactionPayload::RegisterModel(model_name, model_params) => {
