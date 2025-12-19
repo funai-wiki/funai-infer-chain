@@ -8,6 +8,7 @@ dotenvy = "0.15.7"
 
 [dependencies]
 lazy_static = "1.4.0"
+log = "0.4"
 openai = "1.0.0-alpha.14"
 tokio = { version = "1.26.0", features = ["full"] }
 funai-common = { path = "../funai-common" }

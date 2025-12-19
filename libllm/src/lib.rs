@@ -8,6 +8,7 @@ use std::thread;
 use serde::{Deserialize, Serialize};
 
 use hex;
+use log::{info, error};
 use openai::chat::ChatCompletionMessage;
 use k256::ecdsa::{signature::hazmat::PrehashSigner, Signature, SigningKey};
 use k256::EncodedPoint;
@@ -245,7 +246,7 @@ pub fn set_db_path(path: String) {
 
 #[allow(unused_variables)]
 pub fn infer_chain(txid: String, user_input: &str, context_messages: Option<Vec<ChatCompletionMessage>>) -> Result<InferStatus, Box<dyn error::Error>> {
-    println!("infer_chain txid: {} user_input: {}", txid, user_input);
+    info!("infer_chain txid: {} user_input: {}", txid, user_input);
     let llm_db = db::open(db::get_db_path().as_str())?;
     let _ = db::sqlite_create(&llm_db, &txid.as_str(), &"", user_input, InferStatus::Created as u8)?;
     Ok(InferStatus::Created)
@@ -286,11 +287,11 @@ pub async fn _internal_do_infer() -> Result<(), Box<dyn error::Error>>{
     db::sqlite_start_llm(&llm_db, row.txid.as_str(), InferStatus::InProgress as u8)?;
     let result = infer(row.input.as_str(), None).await;
     if !result.is_ok() {
-        println!("infer error: {:?}", result.err());
+        error!("infer error: {:?}", result.err());
         db::sqlite_end_llm(&llm_db, row.txid.as_str(), "", "", InferStatus::Failure as u8)?;
     } else {
         let output = result.unwrap();
-        println!("output: {}", output);
+        info!("output: {}", output);
         let output_hash = hex::encode(Sha256Sum::from_data(output.as_bytes()));
         db::sqlite_end_llm(&llm_db, row.txid.as_str(), output.as_str(), output_hash.as_str(), InferStatus::Success as u8)?;
     }
