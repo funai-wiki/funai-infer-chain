@@ -1508,16 +1508,16 @@ impl FunaiChainState {
 
                             // Transfer 70% to node_principal
                             if node_amount > 0 {
-                                let (_, _asset_map_transfer, events_transfer) = clarity_tx
-                                    .run_stx_transfer(
-                                        &origin_account.principal,
+                            let (_, _asset_map_transfer, events_transfer) = clarity_tx
+                                .run_stx_transfer(
+                                    &origin_account.principal,
                                         node_principal,
                                         node_amount,
-                                        &BuffData {
-                                            data: Vec::new(),
-                                        },
-                                    )
-                                    .map_err(Error::ClarityError)?;
+                                    &BuffData {
+                                        data: Vec::new(),
+                                    },
+                                )
+                                .map_err(Error::ClarityError)?;
                                 all_events.extend(events_transfer);
                             }
                             

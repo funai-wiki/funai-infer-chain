@@ -998,7 +998,7 @@ impl RunLoop {
     fn drive_llm(
         globals: Globals,
     ) {
-        debug!("Chain-llm thread start!");
+        info!("Chain-llm thread start!");
 
         while globals.keep_running() {
             debug!("Chain-llm do_infer");
@@ -1006,7 +1006,7 @@ impl RunLoop {
             sleep_ms(500);
         }
 
-        debug!("Chain-llm thread exit!");
+        info!("Chain-llm thread exit!");
     }
 
     /// Spawn a thread to drive llm infer
