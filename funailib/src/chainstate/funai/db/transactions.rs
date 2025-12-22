@@ -1501,7 +1501,7 @@ impl FunaiChainState {
                             let cost_before = clarity_tx.cost_so_far();
                             
                             // Calculate amount distribution: 10% to miner, 90% to node_principal
-                            let miner_amount = (*amount as u128 * 10) / 100;
+                            // The 10% miner share is handled as an additional transaction fee in process_transaction()
                             let node_amount = (*amount as u128 * 90) / 100;
                             
                             let mut all_events = Vec::new();
@@ -1520,13 +1520,6 @@ impl FunaiChainState {
                                 .map_err(Error::ClarityError)?;
                                 all_events.extend(events_transfer);
                             }
-                            
-                            // Transfer 10% to miner.
-                            // Since we don't have the miner's address explicitly passed here, we will currently
-                            // not transfer the miner's share (it stays with the user).
-                            // This effectively means the user pays 90% of the amount to the node, 
-                            // and the remaining 10% is not spent.
-                            // In a future update, we should locate the block miner address and transfer this share.
                             
                             // Run the infer operation
                             let (value, _asset_map, events) = clarity_tx.run_stx_infer(
@@ -1624,7 +1617,13 @@ impl FunaiChainState {
 
         let mut transaction = clarity_block.connection().start_transaction_processing();
 
-        let fee = tx.get_tx_fee();
+        let mut fee = tx.get_tx_fee();
+        if let TransactionPayload::Infer(_, ref amount, _, _, _, _) = tx.payload {
+            // 10% of the amount goes to the miner as an extra fee
+            let miner_amount = (*amount as u64 * 10) / 100;
+            fee = fee.checked_add(miner_amount).expect("Fee overflow");
+        }
+
         let tx_receipt = if epoch >= FunaiEpochId::Epoch21 {
             // 2.1 and later: pay tx fee, then process transaction
             let (_origin_account, payer_account) =
