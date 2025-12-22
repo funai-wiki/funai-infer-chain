@@ -18,12 +18,11 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::path::PathBuf;
-use std::time::Duration;
 
 use libsigner::{InferModelType, SignerEvent, SubmitInferTask};
 use serde::{Deserialize, Serialize};
-use slog::{slog_debug, slog_error, slog_info, slog_warn};
-use funai_common::{debug, error, info, warn};
+use slog::{slog_debug, slog_error, slog_info};
+use funai_common::{debug, error, info};
 use tokio::sync::mpsc;
 use rusqlite::{Connection, Result as SqliteResult, params};
 
@@ -519,6 +518,24 @@ impl InferenceServiceState {
         }
 
         None
+    }
+
+    /// Submit a new inference task manually via API
+    pub fn submit_task(&self, task: InferTask) -> Result<(), String> {
+        // Save to database
+        if let Ok(db) = self.database.lock() {
+            if let Err(e) = db.save_task(&task) {
+                error!("Failed to save task to database: {}", e);
+                return Err(format!("Database error: {}", e));
+            }
+        }
+
+        // Add to pending tasks
+        if let Ok(mut pending) = self.pending_tasks.lock() {
+            pending.insert(task.task_id.clone(), task);
+        }
+
+        Ok(())
     }
 
     /// Register inference node

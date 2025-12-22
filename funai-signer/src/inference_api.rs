@@ -14,7 +14,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
 
@@ -26,10 +25,11 @@ use funai_common::{debug, error, info, warn};
 use tokio::sync::mpsc;
 
 use crate::inference_service::{
-    InferTask, InferTaskResult, InferTaskStatus, InferenceNode, InferenceService,
-    InferenceServiceEvent, NodeStatus, TaskStatistics,
+    InferTask, InferTaskResult, InferTaskStatus, InferenceNode,
+    InferenceServiceEvent, NodeStatus,
     InferenceServiceState,
 };
+use serde_json::json;
 
 /// Generic API response wrapper
 #[derive(Serialize, Deserialize)]
@@ -74,6 +74,29 @@ pub struct RegisterNodeRequest {
     pub supported_models: Vec<String>,
     /// Node performance score (optional)
     pub performance_score: Option<f64>,
+}
+
+/// Request to submit an inference task via API
+#[derive(Serialize, Deserialize)]
+pub struct SubmitTaskRequest {
+    /// Task ID (optional, will be generated if not provided)
+    pub task_id: Option<String>,
+    /// User address
+    pub user_address: String,
+    /// User input
+    pub user_input: String,
+    /// Context information
+    pub context: String,
+    /// Transaction fee (optional)
+    pub fee: Option<u64>,
+    /// Nonce (optional)
+    pub nonce: Option<u64>,
+    /// Inference fee
+    pub infer_fee: u64,
+    /// Maximum inference time (seconds)
+    pub max_infer_time: u64,
+    /// Model type
+    pub model_type: String,
 }
 
 /// Node status response
@@ -210,6 +233,10 @@ impl InferenceApiServer {
             (&Method::POST, "/api/v1/nodes/register") => {
                 self.handle_register_node(req).await
             }
+            // User submit inference task
+            (&Method::POST, "/api/v1/tasks/submit") => {
+                self.handle_submit_task(req).await
+            }
             // Inference node heartbeat
             (&Method::POST, "/api/v1/nodes/heartbeat") => {
                 self.handle_heartbeat(req).await
@@ -268,7 +295,7 @@ impl InferenceApiServer {
                 };
 
                 let result = {
-                    let mut service = self.shared_state.lock().unwrap();
+                    let service = self.shared_state.lock().unwrap();
                     service.register_inference_node(node)
                 };
 
@@ -290,6 +317,54 @@ impl InferenceApiServer {
         }
     }
 
+    /// Handle user task submission
+    async fn handle_submit_task(&self, req: Request<Body>) -> Response<Body> {
+        match self.parse_json_body::<SubmitTaskRequest>(req).await {
+            Ok(request) => {
+                let task_id = request.task_id.unwrap_or_else(|| {
+                    format!("api-{}", uuid::Uuid::new_v4().to_string())
+                });
+
+                let task = InferTask::new(
+                    task_id.clone(),
+                    request.user_address,
+                    request.user_input,
+                    request.context,
+                    request.fee.unwrap_or(0),
+                    request.nonce.unwrap_or(0),
+                    request.infer_fee,
+                    request.max_infer_time,
+                    self.parse_model_type(&request.model_type),
+                );
+
+                let result = {
+                    let service = self.shared_state.lock().unwrap();
+                    service.submit_task(task)
+                };
+
+                match result {
+                    Ok(()) => {
+                        // Notify via event sender
+                        if let Err(e) = self.event_sender.blocking_send(InferenceServiceEvent::TaskSubmitted(task_id.clone())) {
+                             error!("Failed to send task submitted event: {}", e);
+                        }
+
+                        info!("Task {} submitted via API successfully", task_id);
+                        self.json_response(ApiResponse::success(json!({ "task_id": task_id })), StatusCode::OK)
+                    }
+                    Err(e) => {
+                        error!("Failed to submit task {}: {}", task_id, e);
+                        self.json_response(ApiResponse::<String>::error(e), StatusCode::INTERNAL_SERVER_ERROR)
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to parse submit task request: {}", e);
+                self.json_response(ApiResponse::<String>::error(e), StatusCode::BAD_REQUEST)
+            }
+        }
+    }
+
     /// Handle inference node heartbeat
     async fn handle_heartbeat(&self, req: Request<Body>) -> Response<Body> {
         match self.parse_json_body::<HeartbeatRequest>(req).await {
@@ -303,7 +378,7 @@ impl InferenceApiServer {
                 };
 
                 let result = {
-                    let mut service = self.shared_state.lock().unwrap();
+                    let service = self.shared_state.lock().unwrap();
                     service.update_node_status(&request.node_id, status)
                 };
 
@@ -340,9 +415,57 @@ impl InferenceApiServer {
         // Get tasks that this node can process
         let task = {
             let service = self.shared_state.lock().unwrap();
-            // Here we should implement finding tasks suitable for this node from pending tasks
-            // For simplicity, temporarily return None. In actual implementation, tasks should be filtered based on the node's supported model types
-            None::<InferTask>
+            
+            // 1. Get supported models for the node
+            let supported_models = {
+                let nodes = service.inference_nodes.lock().unwrap();
+                if let Some(node) = nodes.get(&node_id) {
+                    node.supported_models.clone()
+                } else {
+                    Vec::new()
+                }
+            };
+
+            if supported_models.is_empty() {
+                None
+            } else {
+                // 2. Find a suitable pending task
+                let mut found_task_id = None;
+                {
+                    let pending = service.pending_tasks.lock().unwrap();
+                    for (id, task) in pending.iter() {
+                        // Check if the node supports the task's model type
+                        if supported_models.contains(&task.model_type) {
+                            found_task_id = Some(id.clone());
+                            break;
+                        }
+                    }
+                }
+
+                // 3. Move task from pending to processing
+                if let Some(task_id) = found_task_id {
+                    let mut pending = service.pending_tasks.lock().unwrap();
+                    if let Some(mut task) = pending.remove(&task_id) {
+                        task.update_status(InferTaskStatus::InProgress);
+                        
+                        let mut processing = service.processing_tasks.lock().unwrap();
+                        processing.insert(task_id.clone(), task.clone());
+                        
+                        // Save to database
+                        if let Ok(db) = service.database.lock() {
+                            if let Err(e) = db.save_task(&task) {
+                                error!("Failed to save task to database: {}", e);
+                            }
+                        }
+                        
+                        Some(task)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
         };
 
         match task {
@@ -384,7 +507,7 @@ impl InferenceApiServer {
                 };
 
                 let complete_result = {
-                    let mut service = self.shared_state.lock().unwrap();
+                    let service = self.shared_state.lock().unwrap();
                     service.complete_task(&request.task_id, result)
                 };
 
@@ -460,7 +583,7 @@ impl InferenceApiServer {
 
     /// Handle health check
     async fn handle_health_check(&self) -> Response<Body> {
-        let health_status = serde_json::json!({
+        let health_status = json!({
             "status": "healthy",
             "timestamp": std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -613,9 +736,9 @@ mod tests {
 
     fn create_test_server() -> InferenceApiServer {
         let (event_receiver, _) = mpsc::channel(100);
-        let (inference_service, _) = InferenceService::new(event_receiver);
+        let (inference_service, _) = InferenceService::new(event_receiver, std::path::PathBuf::from("test.db"));
         let (event_sender, _) = mpsc::channel(100);
         
-        InferenceApiServer::new(Arc::new(Mutex::new(inference_service)), event_sender)
+        InferenceApiServer::new(Arc::new(Mutex::new(inference_service.get_shared_state())), event_sender)
     }
-} 
+}

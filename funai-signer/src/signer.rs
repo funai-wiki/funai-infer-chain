@@ -18,6 +18,8 @@ use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::time::Instant;
 
+use tokio::sync::mpsc::Sender as TokioSender;
+
 use k256::ecdsa::{signature::hazmat::PrehashSigner, Signature as K256Signature, SigningKey};
 use k256::EncodedPoint;
 use k256::sha2::{Sha256, Digest};
@@ -32,7 +34,7 @@ use funailib::net::api::postblock_proposal::{BlockValidateResponse, ValidateReje
 use hashbrown::HashSet;
 use libsigner::{
     BlockProposalSigners, BlockRejection, BlockResponse, MessageSlotID, RejectCode, SignerEvent,
-    SignerMessage,
+    SignerMessage, SubmitInferTask,
 };
 use serde_derive::{Deserialize, Serialize};
 use slog::{slog_debug, slog_error, slog_info, slog_warn};
@@ -181,6 +183,8 @@ pub struct Signer {
     pub support_models: Vec<String>,
     /// The Funai private key for signing requests
     pub funai_private_key: funai_common::types::chainstate::FunaiPrivateKey,
+    /// Channel to send inference tasks to the inference service
+    pub inference_task_sender: Option<TokioSender<SignerEvent>>,
 }
 
 impl std::fmt::Display for Signer {
@@ -312,6 +316,7 @@ impl From<SignerConfig> for Signer {
             signer_db,
             support_models: signer_config.support_models,
             funai_private_key: signer_config.funai_private_key,
+            inference_task_sender: None,
         }
     }
 }
@@ -1632,8 +1637,20 @@ impl Signer {
             Some(SignerEvent::NewBurnBlock(height)) => {
                 debug!("{self}: Receved a new burn block event for block height {height}")
             }
-            Some(SignerEvent::InferTaskMessage(_)) => {
-                debug!("{self}: Received an inference task message. Ignoring for now.")
+            Some(SignerEvent::InferTaskMessage(task)) => {
+                debug!("{self}: Received an inference task message.");
+                if let Some(sender) = &self.inference_task_sender {
+                    // Re-wrap in SignerEvent because InferenceService expects SignerEvent
+                    let event = SignerEvent::InferTaskMessage(task.clone());
+                    // Use blocking_send or try_send since we are in a sync context
+                    if let Err(e) = sender.try_send(event) {
+                        error!("{self}: Failed to send inference task to service: {e}");
+                    } else {
+                        info!("{self}: Forwarded inference task {} to service", task.task_id);
+                    }
+                } else {
+                    debug!("{self}: No inference task sender configured. Ignoring task.");
+                }
             }
             None => {
                 // No event. Do nothing.

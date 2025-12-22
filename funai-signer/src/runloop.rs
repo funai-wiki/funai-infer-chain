@@ -17,11 +17,12 @@ use std::collections::VecDeque;
 use std::sync::mpsc::Sender;
 use std::time::Duration;
 
+use tokio::sync::mpsc::Sender as TokioSender;
+use libsigner::{SignerEntries, SignerEvent, SignerRunLoop, SubmitInferTask};
 use funailib::burnchains::PoxConstants;
 use funailib::chainstate::funai::boot::SIGNERS_NAME;
 use funailib::util_lib::boot::boot_code_id;
 use hashbrown::HashMap;
-use libsigner::{SignerEntries, SignerEvent, SignerRunLoop};
 use slog::{slog_debug, slog_error, slog_info, slog_warn};
 use funai_common::types::chainstate::FunaiAddress;
 use funai_common::{debug, error, info, warn};
@@ -103,6 +104,8 @@ pub struct RunLoop {
     pub commands: VecDeque<RunLoopCommand>,
     /// The current reward cycle info. Only None if the runloop is uninitialized
     pub current_reward_cycle_info: Option<RewardCycleInfo>,
+    /// Channel to send inference tasks to the inference service
+    pub inference_task_sender: Option<TokioSender<SignerEvent>>,
 }
 
 impl From<GlobalConfig> for RunLoop {
@@ -116,6 +119,7 @@ impl From<GlobalConfig> for RunLoop {
             state: State::Uninitialized,
             commands: VecDeque::new(),
             current_reward_cycle_info: None,
+            inference_task_sender: None,
         }
     }
 }
@@ -241,7 +245,8 @@ impl RunLoop {
                     }
                 }
             }
-            let new_signer = Signer::from(new_signer_config);
+            let mut new_signer = Signer::from(new_signer_config);
+            new_signer.inference_task_sender = self.inference_task_sender.clone();
             info!("{new_signer} initialized.");
             self.funai_signers.insert(reward_index, new_signer);
         } else {

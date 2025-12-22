@@ -37,7 +37,7 @@ use funailib::chainstate::nakamoto::NakamotoBlock;
 use funailib::util_lib::signed_structured_data::pox4::make_pox_4_signer_key_signature;
 use clap::Parser;
 use clarity::vm::types::QualifiedContractIdentifier;
-use libsigner::{RunningSigner, Signer, SignerEventReceiver, SignerSession, FunaiDBSession};
+use libsigner::{RunningSigner, Signer, SignerEventReceiver, SignerSession, FunaiDBSession, SignerEvent};
 use libfunaidb::FunaiDBChunkData;
 use slog::{slog_debug, slog_error, slog_info};
 use funai_common::codec::read_next;
@@ -88,14 +88,15 @@ fn write_chunk_to_stdout(chunk_opt: Option<Vec<u8>>) {
 }
 
 // Spawn a running signer and return its handle, command sender, and result receiver
-fn spawn_running_signer(path: &PathBuf) -> SpawnedSigner {
+fn spawn_running_signer(path: &PathBuf, inference_task_sender: Option<tokio::sync::mpsc::Sender<SignerEvent>>) -> SpawnedSigner {
     let config = GlobalConfig::try_from(path).unwrap();
     let endpoint = config.endpoint;
     info!("Starting signer with config: {}", config);
     let (cmd_send, cmd_recv) = channel();
     let (res_send, res_recv) = channel();
     let ev = SignerEventReceiver::new(config.network.is_mainnet());
-    let runloop = RunLoop::from(config);
+    let mut runloop = RunLoop::from(config);
+    runloop.inference_task_sender = inference_task_sender;
     let mut signer: Signer<RunLoopCommand, Vec<OperationResult>, RunLoop, SignerEventReceiver> =
         Signer::new(runloop, ev, cmd_recv, res_send);
     let running_signer = signer.spawn(endpoint).unwrap();
@@ -196,7 +197,7 @@ fn handle_put_chunk(args: PutChunkArgs) {
 
 fn handle_dkg(args: RunDkgArgs) {
     debug!("Running DKG...");
-    let spawned_signer = spawn_running_signer(&args.config);
+    let spawned_signer = spawn_running_signer(&args.config, None);
     let dkg_command = RunLoopCommand {
         reward_cycle: args.reward_cycle,
         command: SignerCommand::Dkg,
@@ -209,7 +210,7 @@ fn handle_dkg(args: RunDkgArgs) {
 
 fn handle_sign(args: SignArgs) {
     debug!("Signing message...");
-    let spawned_signer = spawn_running_signer(&args.config);
+    let spawned_signer = spawn_running_signer(&args.config, None);
     let Some(block) = read_next::<NakamotoBlock, _>(&mut &args.data[..]).ok() else {
         error!("Unable to parse provided message as a NakamotoBlock.");
         spawned_signer.running_signer.stop();
@@ -231,7 +232,7 @@ fn handle_sign(args: SignArgs) {
 
 fn handle_dkg_sign(args: SignArgs) {
     debug!("Running DKG and signing message...");
-    let spawned_signer = spawn_running_signer(&args.config);
+    let spawned_signer = spawn_running_signer(&args.config, None);
     let Some(block) = read_next::<NakamotoBlock, _>(&mut &args.data[..]).ok() else {
         error!("Unable to parse provided message as a NakamotoBlock.");
         spawned_signer.running_signer.stop();
@@ -261,7 +262,47 @@ fn handle_dkg_sign(args: SignArgs) {
 
 fn handle_run(args: RunSignerArgs) {
     debug!("Running signer...");
-    let spawned_signer = spawn_running_signer(&args.config);
+    
+    // Create tokio runtime for inference service
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    
+    // Create channels for inference service
+    let (signer_event_sender, signer_event_receiver) = tokio::sync::mpsc::channel(1000);
+    
+    // Determine database path (similar to handle_run_inference_service logic)
+    // RunSignerArgs doesn't have database path, so we use a default based on config file location
+    let config_dir = args.config.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let db_path = config_dir.join("inference_tasks.db");
+    
+    debug!("Initializing InferenceService with db: {:?}", db_path);
+    let (mut inference_service, _service_event_receiver) = InferenceService::new(
+        signer_event_receiver,
+        db_path,
+    );
+    
+    // Create a separate channel for API server events
+    let (api_event_sender, _api_event_receiver) = tokio::sync::mpsc::channel(1000);
+    
+    // Create the API server with shared state
+    let api_server = InferenceApiServer::new(
+        Arc::new(Mutex::new(inference_service.get_shared_state())),
+        api_event_sender,
+    );
+    
+    // Spawn Inference Service in the background
+    rt.spawn(async move {
+        inference_service.run().await;
+    });
+    
+    // Spawn the API server task
+    let api_port = args.api_port;
+    rt.spawn(async move {
+        if let Err(e) = api_server.start(api_port).await {
+            error!("API server error: {}", e);
+        }
+    });
+
+    let spawned_signer = spawn_running_signer(&args.config, Some(signer_event_sender));
     println!("Signer spawned successfully. Waiting for messages to process...");
     // Wait for the spawned signer to stop (will only occur if an error occurs)
     let _ = spawned_signer.running_signer.join();

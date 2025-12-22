@@ -162,6 +162,12 @@ pub struct RunSignerArgs {
     /// Path to config file
     #[arg(long, short, value_name = "FILE")]
     pub config: PathBuf,
+    /// The port to bind the inference service API server
+    #[arg(long, default_value = "8080")]
+    pub api_port: u16,
+    /// The host to bind the inference service API server
+    #[arg(long, default_value = "127.0.0.1")]
+    pub api_host: String,
 }
 
 #[derive(Parser, Debug, Clone)]

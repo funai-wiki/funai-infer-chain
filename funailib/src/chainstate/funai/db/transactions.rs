@@ -1500,13 +1500,13 @@ impl FunaiChainState {
                                 .map_err(|e| Error::InvalidFunaiTransaction(e.to_string(), false))?;
                             let cost_before = clarity_tx.cost_so_far();
                             
-                            // Calculate amount distribution: 30% to miner, 70% to node_principal
-                            let miner_amount = (*amount as u128 * 30) / 100;
-                            let node_amount = (*amount as u128 * 70) / 100;
+                            // Calculate amount distribution: 10% to miner, 90% to node_principal
+                            let miner_amount = (*amount as u128 * 10) / 100;
+                            let node_amount = (*amount as u128 * 90) / 100;
                             
                             let mut all_events = Vec::new();
 
-                            // Transfer 70% to node_principal
+                            // Transfer 90% to node_principal
                             if node_amount > 0 {
                             let (_, _asset_map_transfer, events_transfer) = clarity_tx
                                 .run_stx_transfer(
@@ -1521,11 +1521,11 @@ impl FunaiChainState {
                                 all_events.extend(events_transfer);
                             }
                             
-                            // Transfer 30% to miner.
+                            // Transfer 10% to miner.
                             // Since we don't have the miner's address explicitly passed here, we will currently
                             // not transfer the miner's share (it stays with the user).
-                            // This effectively means the user pays 70% of the amount to the node, 
-                            // and the remaining 30% is not spent.
+                            // This effectively means the user pays 90% of the amount to the node, 
+                            // and the remaining 10% is not spent.
                             // In a future update, we should locate the block miner address and transfer this share.
                             
                             // Run the infer operation
