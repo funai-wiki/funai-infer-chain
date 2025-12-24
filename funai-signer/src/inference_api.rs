@@ -344,13 +344,13 @@ impl InferenceApiServer {
 
                 match result {
                     Ok(()) => {
-                        // Notify via event sender
+                // Notify via event sender
                         if let Err(e) = self.event_sender.blocking_send(InferenceServiceEvent::TaskSubmitted(task_id.clone())) {
-                             error!("Failed to send task submitted event: {}", e);
-                        }
+                     error!("Failed to send task submitted event: {}", e);
+                }
 
                         info!("Task {} submitted via API successfully", task_id);
-                        self.json_response(ApiResponse::success(json!({ "task_id": task_id })), StatusCode::OK)
+                self.json_response(ApiResponse::success(json!({ "task_id": task_id })), StatusCode::OK)
                     }
                     Err(e) => {
                         error!("Failed to submit task {}: {}", task_id, e);
@@ -741,4 +741,4 @@ mod tests {
         
         InferenceApiServer::new(Arc::new(Mutex::new(inference_service.get_shared_state())), event_sender)
     }
-}
+} 

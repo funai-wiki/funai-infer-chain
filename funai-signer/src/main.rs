@@ -263,21 +263,28 @@ fn handle_dkg_sign(args: SignArgs) {
 fn handle_run(args: RunSignerArgs) {
     debug!("Running signer...");
     
+    // Load config to get db_path
+    let config = GlobalConfig::try_from(&args.config).expect("Failed to load config");
+    let db_dir = config.db_path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    
     // Create tokio runtime for inference service
     let rt = tokio::runtime::Runtime::new().unwrap();
     
     // Create channels for inference service
     let (signer_event_sender, signer_event_receiver) = tokio::sync::mpsc::channel(1000);
     
-    // Determine database path (similar to handle_run_inference_service logic)
-    // RunSignerArgs doesn't have database path, so we use a default based on config file location
-    let config_dir = args.config.parent().unwrap_or_else(|| std::path::Path::new("."));
-    let db_path = config_dir.join("inference_tasks.db");
+    // Set libllm DB path to be at the same level as signer db
+    let llm_db_path = db_dir.join("llm.sqlite");
+    info!("Setting libllm database path to: {:?}", llm_db_path);
+    libllm::set_db_path(llm_db_path.to_str().unwrap().to_string());
     
-    debug!("Initializing InferenceService with db: {:?}", db_path);
+    // Determine inference service database path
+    let inference_db_path = db_dir.join("inference_tasks.db");
+    
+    debug!("Initializing InferenceService with db: {:?}", inference_db_path);
     let (mut inference_service, _service_event_receiver) = InferenceService::new(
         signer_event_receiver,
-        db_path,
+        inference_db_path,
     );
     
     // Create a separate channel for API server events

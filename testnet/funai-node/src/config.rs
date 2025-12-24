@@ -1744,6 +1744,8 @@ pub struct NodeConfig {
     pub chain_liveness_poll_time_secs: u64,
     /// funai DBs we replicate
     pub funai_dbs: Vec<QualifiedContractIdentifier>,
+    /// Path to the LLM database file
+    pub llm_db_path: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -2025,6 +2027,7 @@ impl Default for NodeConfig {
             fault_injection_hide_blocks: false,
             chain_liveness_poll_time_secs: 300,
             funai_dbs: vec![],
+            llm_db_path: None,
         }
     }
 }
@@ -2475,6 +2478,8 @@ pub struct NodeConfigFile {
     pub chain_liveness_poll_time_secs: Option<u64>,
     /// Funai DBs we replicate
     pub funai_dbs: Option<Vec<String>>,
+    /// Path to the LLM database file
+    pub llm_db_path: Option<String>,
 }
 
 impl NodeConfigFile {
@@ -2551,6 +2556,7 @@ impl NodeConfigFile {
                 .iter()
                 .filter_map(|contract_id| QualifiedContractIdentifier::parse(contract_id).ok())
                 .collect(),
+            llm_db_path: self.llm_db_path.or(default_node_config.llm_db_path),
         };
         Ok(node_config)
     }
