@@ -122,12 +122,17 @@ Additional testnet documentation is available [here](./docs/testnet.md)
 
 ## Docker
 
-### Build
-- Release-lite (recommended): `docker build -t infer-node:latest -f Dockerfile .`
-- Signer: `docker build -t infer-signer:latest -f Dockerfile.signer .`
-- Dev (fastest, no optimizations): `docker build -t infer-node:dev -f Dockerfile.dev .`
+### Build infer-node
+- **Release-lite (recommended)**:
+  ```bash
+  docker build -t infer-node:latest -f Dockerfile .
+  ```
+- **Dev (fastest, no optimizations)**:
+  ```bash
+  docker build -t infer-node:dev -f Dockerfile.dev .
+  ```
 
-Signer build (expanded):
+### Build infer-signer
 ```bash
 docker build -t infer-signer:latest -f Dockerfile.signer .
 ```
