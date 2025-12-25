@@ -1,7 +1,6 @@
 [package]
-name = "funai-node"
+name = "miner-node"
 version = "0.1.0"
-authors = ["Jude Nelson <jude@funai.org>", "Aaron Blankstein <aaron@blockstack.com>", "Ludo Galabru <ludovic@blockstack.com>"]
 edition = "2021"
 resolver = "2"
 rust-version = "1.61"
@@ -27,7 +26,6 @@ funai-common = { path = "../../funai-common" }
 chrono = "0.4.19"
 regex = "1"
 libsigner = { path = "../../libsigner" }
-libllm = { path = "../../libllm" }
 wsts = { workspace = true }
 rand = { workspace = true }
 rand_core = { workspace = true }
@@ -55,7 +53,7 @@ version = "=0.24.2"
 features = ["blob", "serde_json", "i128_blob", "bundled", "trace"]
 
 [[bin]]
-name = "infer-node"
+name = "miner-node"
 path = "src/main.rs"
 
 [[bin]]

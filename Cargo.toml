@@ -11,7 +11,8 @@ members = [
     "libllm",
     "libsigner",
     "funai-signer",
-    "testnet/funai-node"]
+    "testnet/funai-node",
+    "testnet/infer-node"]
 
 # Dependencies we want to keep the same between workspace members
 [workspace.dependencies]

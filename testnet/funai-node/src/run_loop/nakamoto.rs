@@ -19,7 +19,6 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::{cmp, thread};
 
-use libllm::do_infer;
 use funai::burnchains::bitcoin::address::{BitcoinAddress, LegacyBitcoinAddressType};
 use funai::burnchains::{Burnchain, Error as burnchain_error};
 use funai::chainstate::burn::db::sortdb::SortitionDB;
@@ -388,36 +387,6 @@ impl RunLoop {
         )
     }
 
-    /// In a separate thread, loop llm do_infer
-    fn drive_llm(
-        globals: Globals,
-    ) {
-        info!("Chain-llm thread start!");
-
-        while globals.keep_running() {
-            debug!("Chain-llm do_infer");
-            let _ = do_infer();
-            sleep_ms(500);
-        }
-
-        info!("Chain-llm thread exit!");
-    }
-
-    /// Spawn a thread to drive llm infer
-    fn spawn_llm_thread(&self, globals: Globals) -> JoinHandle<()> {
-        let config = self.config.clone();
-
-        let llm_thread_handle = thread::Builder::new()
-            .name(format!("chain-llm-{}", config.node.rpc_bind))
-            .stack_size(BLOCK_PROCESSOR_STACK_SIZE)
-            .spawn(move || {
-                Self::drive_llm(globals)
-            })
-            .expect("FATAL: failed to spawn chain llm thread");
-
-        llm_thread_handle
-    }
-
     /// Starts the node runloop.
     ///
     /// This function will block by looping infinitely.
@@ -508,7 +477,6 @@ impl RunLoop {
         // Boot up the p2p network and relayer, and figure out how many sortitions we have so far
         // (it could be non-zero if the node is resuming from chainstate)
         let mut node = FunaiNode::spawn(self, globals.clone(), relay_recv);
-        let llm_thread = self.spawn_llm_thread(globals.clone());
 
         // Wait for all pending sortitions to process
         let burnchain_db = burnchain_config
@@ -558,7 +526,6 @@ impl RunLoop {
                 globals.coord().stop_chains_coordinator();
                 coordinator_thread_handle.join().unwrap();
                 node.join();
-                llm_thread.join().unwrap();
 
                 info!("Exiting funai-node");
                 break;

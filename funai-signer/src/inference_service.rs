@@ -104,6 +104,8 @@ pub struct InferTask {
     pub max_infer_time: u64,
     /// Model type
     pub model_type: InferModelType,
+    /// Signed transaction hex
+    pub signed_tx: Option<String>,
     /// Task status
     pub status: InferTaskStatus,
     /// Creation time
@@ -126,6 +128,7 @@ impl InferTask {
         infer_fee: u64,
         max_infer_time: u64,
         model_type: InferModelType,
+        signed_tx: Option<String>,
     ) -> Self {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -142,6 +145,7 @@ impl InferTask {
             infer_fee,
             max_infer_time,
             model_type,
+            signed_tx,
             status: InferTaskStatus::Pending,
             created_at: now,
             updated_at: now,
@@ -256,6 +260,7 @@ impl InferenceDatabase {
                 infer_fee INTEGER NOT NULL,
                 max_infer_time INTEGER NOT NULL,
                 model_type TEXT NOT NULL,
+                signed_tx TEXT,
                 status TEXT NOT NULL,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
@@ -303,9 +308,9 @@ impl InferenceDatabase {
         self.conn.execute(
             "INSERT OR REPLACE INTO inference_tasks 
              (task_id, user_address, user_input, context, fee, nonce, infer_fee, 
-              max_infer_time, model_type, status, created_at, updated_at, 
+              max_infer_time, model_type, signed_tx, status, created_at, updated_at, 
               output, confidence, completed_at, inference_node_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             params![
                 task.task_id,
                 task.user_address,
@@ -316,6 +321,7 @@ impl InferenceDatabase {
                 task.infer_fee as i64,
                 task.max_infer_time as i64,
                 model_type_str,
+                task.signed_tx,
                 task.status.to_string(),
                 task.created_at as i64,
                 task.updated_at as i64,
@@ -333,7 +339,7 @@ impl InferenceDatabase {
     pub fn load_task(&self, task_id: &str) -> SqliteResult<Option<InferTask>> {
         let mut stmt = self.conn.prepare(
             "SELECT task_id, user_address, user_input, context, fee, nonce, infer_fee,
-                    max_infer_time, model_type, status, created_at, updated_at,
+                    max_infer_time, model_type, signed_tx, status, created_at, updated_at,
                     output, confidence, completed_at, inference_node_id
              FROM inference_tasks WHERE task_id = ?"
         )?;
@@ -350,13 +356,14 @@ impl InferenceDatabase {
             let infer_fee: i64 = row.get(6)?;
             let max_infer_time: i64 = row.get(7)?;
             let model_type_str: String = row.get(8)?;
-            let status_str: String = row.get(9)?;
-            let created_at: i64 = row.get(10)?;
-            let updated_at: i64 = row.get(11)?;
-            let output: Option<String> = row.get(12)?;
-            let confidence: Option<f64> = row.get(13)?;
-            let completed_at: Option<i64> = row.get(14)?;
-            let inference_node_id: Option<String> = row.get(15)?;
+            let signed_tx: Option<String> = row.get(9)?;
+            let status_str: String = row.get(10)?;
+            let created_at: i64 = row.get(11)?;
+            let updated_at: i64 = row.get(12)?;
+            let output: Option<String> = row.get(13)?;
+            let confidence: Option<f64> = row.get(14)?;
+            let completed_at: Option<i64> = row.get(15)?;
+            let inference_node_id: Option<String> = row.get(16)?;
 
             let model_type = match model_type_str.as_str() {
                 "deepseek" => InferModelType::DeepSeek(None),
@@ -391,6 +398,7 @@ impl InferenceDatabase {
                 infer_fee: infer_fee as u64,
                 max_infer_time: max_infer_time as u64,
                 model_type,
+                signed_tx,
                 status,
                 created_at: created_at as u64,
                 updated_at: updated_at as u64,
@@ -711,6 +719,7 @@ impl InferenceService {
             submit_task.infer_fee,
             submit_task.max_infer_time,
             submit_task.model_type,
+            None, // No signed_tx from event sender for now
         );
 
         // Add to pending tasks

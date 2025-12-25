@@ -98,9 +98,13 @@ pub async fn infer(user_input: &str, context_messages: Option<Vec<ChatCompletion
         .await?;
 
     if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_else(|e| format!("Failed to read body: {}", e));
+        println!("infer request failed status: {}, body: {}", status, body);
+        error!("infer request failed status: {}, body: {}", status, body);
         return Err(Box::new(Error::new(
             ErrorKind::Other,
-            format!("NON_200_STATUS {}", response.status()),
+            format!("NON_200_STATUS {} body: {}", status, body),
         )));
     }
 
@@ -265,7 +269,64 @@ pub fn query(txid: String) -> Result<InferResult, Box<dyn error::Error>> {
     })
 }
 
+use std::sync::RwLock;
+use lazy_static::lazy_static;
+
+lazy_static! {
+    static ref SIGNER_URL: RwLock<Option<String>> = RwLock::new(None);
+}
+
+pub fn set_signer_url(url: String) {
+    let mut signer_url = SIGNER_URL.write().unwrap();
+    *signer_url = Some(url);
+}
+
+pub fn get_signer_url() -> Option<String> {
+    SIGNER_URL.read().unwrap().clone()
+}
+
 pub fn query_hash(txid: String) -> Result<InferResult, Box<dyn error::Error>> {
+    if let Some(signer_url) = get_signer_url() {
+        let url = format!("{}/api/v1/tasks/{}/status", signer_url, txid);
+        let resp = reqwest::blocking::get(&url)?;
+        if resp.status().is_success() {
+            #[derive(Deserialize)]
+            struct SignerTaskResponse {
+                pub status: String,
+                pub result: Option<serde_json::Value>,
+            }
+            #[derive(Deserialize)]
+            struct SignerApiResponse {
+                pub success: bool,
+                pub data: Option<SignerTaskResponse>,
+            }
+            let api_resp: SignerApiResponse = resp.json()?;
+            if api_resp.success {
+                if let Some(task) = api_resp.data {
+                    let status = match task.status.as_str() {
+                        "completed" | "submitted" => InferStatus::Success,
+                        "failed" => InferStatus::Failure,
+                        "in_progress" => InferStatus::InProgress,
+                        _ => InferStatus::Created,
+                    };
+                    let output_hash = if let Some(res) = task.result {
+                        // Assuming the result contains output_hash
+                        res.get("output_hash").and_then(|v| v.as_str()).unwrap_or("").to_string()
+                    } else {
+                        "".to_string()
+                    };
+                    return Ok(InferResult {
+                        txid,
+                        status,
+                        input: "".to_string(),
+                        output: "".to_string(),
+                        output_hash,
+                    });
+                }
+            }
+        }
+    }
+
     let llm_db = db::open(db::get_db_path().as_str())?;
     let result = db::sqlite_get(&llm_db, &txid.as_str())?;
     Ok(InferResult{

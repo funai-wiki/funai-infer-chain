@@ -113,7 +113,7 @@ You can observe the state machine in action locally by running:
 
 ```bash
 cd testnet/funai-node
-cargo run --bin infer-node -- start --config ./conf/testnet-follower-conf.toml
+cargo run --bin miner-node -- start --config ./conf/testnet-follower-conf.toml
 ```
 
 _On Windows, many tests will fail if the line endings aren't `LF`. Please ensure that you are have git's `core.autocrlf` set to `input` when you clone the repository to avoid any potential issues. This is due to the Clarity language currently being sensitive to line endings._
@@ -122,29 +122,39 @@ Additional testnet documentation is available [here](./docs/testnet.md)
 
 ## Docker
 
-### Build infer-node
+### Build miner-node
 - **Release-lite (recommended)**:
   ```bash
-  docker build -t infer-node:latest -f Dockerfile .
+  docker build -t miner-node:latest -f Dockerfile .
   ```
+
+### Build infer-node
+```bash
+docker build -t infer-node:latest -f testnet/infer-node/Dockerfile .
+```
 
 ### Build infer-signer
 ```bash
 docker build -t infer-signer:latest -f Dockerfile.signer .
 ```
 
+### Run miner-node
+```bash
+docker run -d \
+  --name miner-node \
+  -p 20443:20443 \
+  -p 20444:20444 \
+  -v /usr/local/data/llm_chain_local/testnet:/usr/local/data/llm_chain_local/testnet \
+  miner-node:latest
+```
+
 ### Run infer-node
 ```bash
 docker run -d \
   --name infer-node \
-  -p 20443:20443 \
-  -p 20444:20444 \
-  -v /usr/local/data/llm_chain_local/testnet:/usr/local/data/llm_chain_local/testnet \
-  infer-node:latest
+  -v /usr/local/data/llm_infer_local/testnet:/usr/local/data/llm_infer_local/testnet \
+  infer-node:latest --config /usr/local/data/llm_infer_local/testnet/config.toml
 ```
-- Default config in image: `/etc/infer-chain/fai-testnet-miner-conf.toml` (not_commit version copied).
-- Env vars already set: `STACKS_LOG_INFO=1`, `BLOCKSTACK_DB_TRACE=0`.
-- If you prefer storing data under home: `mkdir -p ~/infer-chain-data/node` then mount `-v ~/infer-chain-data/node:/usr/local/data/llm_chain_local/testnet`.
 
 ### Run infer-signer
 ```bash
@@ -163,7 +173,7 @@ docker run -d \
   docker buildx build --progress=plain \
     --cache-from type=local,src=.docker-cache \
     --cache-to   type=local,dest=.docker-cache,mode=max \
-    -t infer-node:latest -f Dockerfile .
+    -t miner-node:latest -f Dockerfile .
   ```
 - Signer BuildKit cache example:
   ```

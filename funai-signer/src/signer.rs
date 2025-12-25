@@ -928,7 +928,7 @@ impl Signer {
                                     
                                     let local_resp = rt.block_on(async {
                                         let mut request = reqwest::Client::new()
-                                            .post("http://127.0.0.1:8000/generate");
+                                            .post("http://34.143.166.224:8000/generate");
                                         
                                         if !pubkey_hex.is_empty() {
                                             request = request

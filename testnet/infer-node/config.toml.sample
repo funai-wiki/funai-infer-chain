@@ -1,0 +1,6 @@
+node_id = "infer-node-1"
+signer_endpoint = "http://127.0.0.1:20443"
+miner_endpoint = "http://127.0.0.1:20443"
+supported_models = ["llama-3", "gpt-4"]
+polling_interval_ms = 1000
+

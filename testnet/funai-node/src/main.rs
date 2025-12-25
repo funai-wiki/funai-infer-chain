@@ -424,11 +424,9 @@ fn main() {
         }
     };
 
-    // Set libllm DB path based on config (explicit path or based on working_dir)
-    let llm_db_path = conf.node.llm_db_path.clone().unwrap_or_else(|| {
-        format!("{}/llm.sqlite", conf.node.working_dir)
-    });
-    libllm::set_db_path(llm_db_path);
+    if let Some(ref signer_endpoint) = conf.node.signer_endpoint {
+        libllm::set_signer_url(signer_endpoint.clone());
+    }
 
     debug!("node configuration {:?}", &conf.node);
     debug!("burnchain configuration {:?}", &conf.burnchain);

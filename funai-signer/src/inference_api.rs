@@ -97,6 +97,8 @@ pub struct SubmitTaskRequest {
     pub max_infer_time: u64,
     /// Model type
     pub model_type: String,
+    /// Signed transaction hex (optional)
+    pub signed_tx: Option<String>,
 }
 
 /// Node status response
@@ -175,6 +177,8 @@ pub struct GetTaskResponse {
     pub max_infer_time: u64,
     /// Inference fee
     pub infer_fee: u64,
+    /// Signed transaction hex
+    pub signed_tx: Option<String>,
 }
 
 /// HTTP API server
@@ -335,6 +339,7 @@ impl InferenceApiServer {
                     request.infer_fee,
                     request.max_infer_time,
                     self.parse_model_type(&request.model_type),
+                    request.signed_tx,
                 );
 
                 let result = {
@@ -477,6 +482,7 @@ impl InferenceApiServer {
                     model_type: format!("{:?}", task.model_type),
                     max_infer_time: task.max_infer_time,
                     infer_fee: task.infer_fee,
+                    signed_tx: task.signed_tx,
                 };
                 
                 info!("Assigned task {} to node {}", response.task_id, node_id);
