@@ -127,10 +127,6 @@ Additional testnet documentation is available [here](./docs/testnet.md)
   ```bash
   docker build -t infer-node:latest -f Dockerfile .
   ```
-- **Dev (fastest, no optimizations)**:
-  ```bash
-  docker build -t infer-node:dev -f Dockerfile.dev .
-  ```
 
 ### Build infer-signer
 ```bash
