@@ -25,7 +25,7 @@ use hashbrown::HashSet;
 use libsigner::{
     BlockProposalSigners, MessageSlotID, SignerMessage, SignerSession, FunaiDBSession,
 };
-use funai::burnchains::Burnchain;
+use funai::burnchains::{Burnchain, Txid};
 use funai::chainstate::burn::db::sortdb::SortitionDB;
 use funai::chainstate::burn::{BlockSnapshot, ConsensusHash};
 use funai::chainstate::nakamoto::miner::{NakamotoBlockBuilder, NakamotoTenureInfo};
@@ -42,7 +42,7 @@ use funai::net::funaidb::FunaiDBs;
 use funai_common::codec::read_next;
 use funai_common::types::chainstate::{FunaiAddress, FunaiBlockId};
 use funai_common::types::{PrivateKey, FunaiEpochId};
-use funai_common::util::hash::Hash160;
+use funai_common::util::hash::{Hash160, hex_bytes};
 use funai_common::util::vrf::VRFProof;
 use wsts::curve::point::Point;
 use wsts::curve::scalar::Scalar;
@@ -190,6 +190,27 @@ impl BlockMinerThread {
                     &mut attempts,
                 ) {
                     Ok(x) => x,
+                    Err(NakamotoNodeError::SignerFilterError(invalid_txs)) => {
+                        warn!("Signers requested selective transaction removal: {:?}", invalid_txs);
+                        let mut mem_pool = self
+                            .config
+                            .connect_mempool_db()
+                            .expect("Database failure opening mempool");
+                        let mut drop_txids = Vec::new();
+                        for txid_hex in invalid_txs {
+                            if let Ok(txid_bytes) = hex_bytes(&txid_hex) {
+                                if let Some(txid) = Txid::from_bytes(&txid_bytes) {
+                                    info!("Removing invalid transaction from mempool: {}", txid);
+                                    drop_txids.push(txid);
+                                }
+                            }
+                        }
+                        if !drop_txids.is_empty() {
+                            let _ = mem_pool.drop_txs(&drop_txids);
+                        }
+                        // Try mining again without the bad transactions
+                        continue;
+                    }
                     Err(e) => {
                         error!("Unrecoverable error while proposing block to signer set: {e:?}. Ending tenure.");
                         return;

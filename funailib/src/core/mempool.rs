@@ -369,7 +369,7 @@ impl std::fmt::Display for MemPoolDropReason {
 }
 
 pub trait ProposalCallbackReceiver: Send {
-    fn notify_proposal_result(&self, result: Result<BlockValidateOk, BlockValidateReject>);
+    fn notify_proposal_result(&self, result: crate::net::api::postblock_proposal::BlockValidateResponse);
 }
 
 pub trait MemPoolEventDispatcher {

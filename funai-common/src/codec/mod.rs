@@ -119,6 +119,18 @@ impl FunaiMessageCodec for [u8; 32] {
     }
 }
 
+impl FunaiMessageCodec for String {
+    fn consensus_serialize<W: Write>(&self, fd: &mut W) -> Result<(), Error> {
+        let bytes = self.as_bytes().to_vec();
+        write_next(fd, &bytes)
+    }
+
+    fn consensus_deserialize<R: Read>(fd: &mut R) -> Result<String, Error> {
+        let bytes: Vec<u8> = read_next(fd)?;
+        String::from_utf8(bytes).map_err(|e| Error::DeserializeError(format!("Invalid UTF-8: {:?}", e)))
+    }
+}
+
 pub fn write_next<T: FunaiMessageCodec, W: Write>(fd: &mut W, item: &T) -> Result<(), Error> {
     item.consensus_serialize(fd)
 }

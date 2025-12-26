@@ -81,6 +81,8 @@ pub struct BlockInfo {
     pub vote: Option<NakamotoBlockVote>,
     /// Whether the block contents are valid
     valid: Option<bool>,
+    /// Invalid transactions discovered during validation
+    invalid_txids: Vec<String>,
     /// The associated packet nonce request if we have one
     nonce_request: Option<NonceRequest>,
     /// Whether this block is already being signed over
@@ -94,6 +96,7 @@ impl BlockInfo {
             block,
             vote: None,
             valid: None,
+            invalid_txids: Vec::new(),
             nonce_request: None,
             signed_over: false,
         }
@@ -105,6 +108,7 @@ impl BlockInfo {
             block,
             vote: None,
             valid: None,
+            invalid_txids: Vec::new(),
             nonce_request: Some(nonce_request),
             signed_over: true,
         }
@@ -534,8 +538,25 @@ impl Signer {
                         return;
                     }
                 };
-                let is_valid = self.verify_block_transactions(funai_client, &block_info.block);
-                block_info.valid = Some(is_valid);
+                match self.verify_block_transactions(funai_client, &block_info.block) {
+                    Ok(_) => {
+                        block_info.valid = Some(true);
+                        block_info.invalid_txids = Vec::new();
+                    }
+                    Err(invalid_txs) => {
+                        block_info.valid = Some(false);
+                        let mut sorted_invalid_txs = invalid_txs.clone();
+                        sorted_invalid_txs.sort();
+                        block_info.invalid_txids = sorted_invalid_txs.clone();
+                        if !sorted_invalid_txs.is_empty() {
+                            warn!("{self}: Block validation failed with selective tx removal: {:?}", sorted_invalid_txs);
+                            let filter = BlockResponse::filter(signer_signature_hash, sorted_invalid_txs);
+                            if let Err(e) = self.funaidb.send_message_with_retry(filter.into()) {
+                                warn!("{self}: Failed to send block filter to funai-db: {e:?}");
+                            }
+                        }
+                    }
+                }
                 self.signer_db
                     .insert_block(self.reward_cycle, &block_info)
                     .unwrap_or_else(|_| panic!("{self}: Failed to insert block in DB"));
@@ -567,11 +588,50 @@ impl Signer {
                 // Submit a rejection response to the .signers contract for miners
                 // to observe so they know to send another block and to prove signers are doing work);
                 warn!("{self}: Broadcasting a block rejection due to funai node validation failure...");
+                let block_rejection = BlockRejection::new(
+                    signer_signature_hash,
+                    RejectCode::ValidationFailed(block_validate_reject.reason_code.clone()),
+                );
                 if let Err(e) = self
                     .funaidb
-                    .send_message_with_retry(block_validate_reject.clone().into())
+                    .send_message_with_retry(block_rejection.into())
                 {
                     warn!("{self}: Failed to send block rejection to funai-db: {e:?}",);
+                }
+                block_info
+            }
+            BlockValidateResponse::Filter(filter) => {
+                let signer_signature_hash = filter.signer_signature_hash;
+                let mut block_info = match self
+                    .signer_db
+                    .block_lookup(self.reward_cycle, &signer_signature_hash)
+                {
+                    Ok(Some(block_info)) => block_info,
+                    Ok(None) => {
+                        debug!("{self}: Received a block validate filter response for a block we have not seen before. Ignoring...");
+                        return;
+                    }
+                    Err(e) => {
+                        error!("{self}: Failed to lookup block in signer db: {e:?}");
+                        return;
+                    }
+                };
+                
+                // Mark as invalid for now, but we've sent the filter info to the miner
+                block_info.valid = Some(false);
+                block_info.invalid_txids = filter.invalid_transactions.clone();
+                
+                // Submit a rejection response with BadTransactions code
+                warn!("{self}: Broadcasting a block filter due to funai node validation failure (bad transactions)...");
+                let block_rejection = BlockRejection::new(
+                    signer_signature_hash,
+                    RejectCode::ValidationFailed(ValidateRejectCode::BadTransactions),
+                );
+                if let Err(e) = self
+                    .funaidb
+                    .send_message_with_retry(block_rejection.into())
+                {
+                    warn!("{self}: Failed to send block rejection (filter) to funai-db: {e:?}",);
                 }
                 block_info
             }
@@ -608,13 +668,10 @@ impl Signer {
                     "block_hash" => block_info.block.header.block_hash(),
                     "valid" => block_info.valid,
                     "signed_over" => block_info.signed_over,
-                    "coordinator_id" => coordinator_id,
+                    "coordinator_id" => ?coordinator_id
                 );
             }
         }
-        self.signer_db
-            .insert_block(self.reward_cycle, &block_info)
-            .unwrap_or_else(|_| panic!("{self}: Failed to insert block in DB"));
     }
 
     /// Handle signer messages submitted to signers funaidb
@@ -881,8 +938,8 @@ impl Signer {
         &mut self,
         funai_client: &FunaiClient,
         block: &NakamotoBlock,
-    ) -> bool {
-        let mut is_infer_valid = true;
+    ) -> Result<(), Vec<String>> {
+        let mut invalid_txids = Vec::new();
         let sig_hash = block.header.signer_signature_hash();
         match  self.signer_db.miner_endpoint_lookup(self.reward_cycle, &sig_hash) {
             Ok(Some(miner_endpoint)) => {
@@ -897,8 +954,8 @@ impl Signer {
                                     info!("Infer res for tx {txid}: {infer_res:?}");
                                     if !matches!(infer_res.status, libllm::InferStatus::Success) {
                                         warn!("Infer res isn't ok for tx {txid}: {infer_res:?}");
-                                        is_infer_valid = false;
-                                        break;
+                                        invalid_txids.push(txid);
+                                        continue;
                                     }
                                     let output = infer_res.output.clone();
                                     let user_input = input.to_string();
@@ -928,7 +985,7 @@ impl Signer {
                                     
                                     let local_resp = rt.block_on(async {
                                         let mut request = reqwest::Client::new()
-                                            .post("http://34.143.166.224:8000/generate");
+                                            .post("http://127.0.0.1:8000/generate");
                                         
                                         if !pubkey_hex.is_empty() {
                                             request = request
@@ -991,14 +1048,14 @@ impl Signer {
                                         }
                                     };
                                     if !ok {
-                                        is_infer_valid = false;
-                                        break;
+                                        invalid_txids.push(txid);
+                                        continue;
                                     }
                                 }
                                 Err(e) => {
                                     error!("{self}: Failed to get infer res for tx {txid}: {e:?}");
-                                    is_infer_valid = false;
-                                    break;
+                                    invalid_txids.push(txid);
+                                    continue;
                                 }
                             }
                         }
@@ -1007,8 +1064,8 @@ impl Signer {
                             let name = model_name.to_string();
                             if !self.support_models.contains(&name) {
                                 warn!("{self}: Rejecting RegisterModel tx for unsupported model: {}", name);
-                                is_infer_valid = false;
-                                break;
+                                invalid_txids.push(tx.txid().to_string());
+                                continue;
                             }
                         }
                         _ => {} // just ignore other tx types
@@ -1016,34 +1073,26 @@ impl Signer {
                 }
             }
             Ok(None) => {
-                warn!("{self}: No miner endpoint found for block {sig_hash}. Not sending miner endpoint info to signer-db.");
-                is_infer_valid = false;
+                warn!("{self}: No miner endpoint found for block {sig_hash}.");
+                // If we can't find the endpoint, we can't verify Infer transactions.
+                // We should return any already found invalid txids.
+                return Err(invalid_txids);
             }
             Err(e) => {
                 error!("{self}: Failed to connect to signer DB: {e:?}");
-                is_infer_valid = false;
+                return Err(invalid_txids);
             }
         }
-        if !is_infer_valid {
-            debug!("{self}: Broadcasting a block rejection due to failed infer check...");
-            let block_rejection = BlockRejection::new(
-                block.header.signer_signature_hash(),
-                RejectCode::ValidationFailed(ValidateRejectCode::BadTransaction),
-            );
-            // Submit signature result to miners to observe
-            if let Err(e) = self
-                .funaidb
-                .send_message_with_retry(block_rejection.into())
-            {
-                warn!("{self}: Failed to send block rejection to funai-db: {e:?}",);
-            }
-            return is_infer_valid;
+
+        if !invalid_txids.is_empty() {
+            return Err(invalid_txids);
         }
+
         if self.approved_aggregate_public_key.is_some() {
             // We do not enforce a block contain any transactions except the aggregate votes when it is NOT already set
             // TODO: should be only allow special cased transactions during prepare phase before a key is set?
             debug!("{self}: Already have an aggregate key. Skipping transaction verification...");
-            return true;
+            return Ok(());
         }
         if let Ok(expected_transactions) = self.get_expected_transactions(funai_client) {
             //It might be worth building a hashset of the blocks' txids and checking that against the expected transaction's txid.
@@ -1053,16 +1102,15 @@ impl Signer {
                 .into_iter()
                 .filter_map(|tx| {
                     if !block_tx_hashset.contains(&tx.txid()) {
-                        debug!("{self}: expected txid {} is in the block", &tx.txid());
+                        debug!("{self}: missing expected txid {} is in the block", &tx.txid());
                         Some(tx)
                     } else {
-                        debug!("{self}: missing expected txid {}", &tx.txid());
+                        debug!("{self}: expected txid {} is in the block", &tx.txid());
                         None
                     }
                 })
                 .collect::<Vec<_>>();
-            let is_valid = missing_transactions.is_empty();
-            if !is_valid {
+            if !missing_transactions.is_empty() {
                 debug!("{self}: Broadcasting a block rejection due to missing expected transactions...");
                 let block_rejection = BlockRejection::new(
                     block.header.signer_signature_hash(),
@@ -1075,9 +1123,9 @@ impl Signer {
                 {
                     warn!("{self}: Failed to send block rejection to funai-db: {e:?}",);
                 }
-                return is_valid;
+                return Err(invalid_txids);
             }
-            is_valid && is_infer_valid
+            Ok(())
         } else {
             // Failed to connect to the funai node to get transactions. Cannot validate the block. Reject it.
             debug!("{self}: Broadcasting a block rejection due to signer connectivity issues...",);
@@ -1092,7 +1140,7 @@ impl Signer {
             {
                 warn!("{self}: Failed to send block submission to funai-db: {e:?}",);
             }
-            false
+            Err(invalid_txids)
         }
     }
 
@@ -1148,9 +1196,18 @@ impl Signer {
         } else {
             debug!("{self}: Accepting block {}", block_info.block.block_id());
         }
+        
+        let mut invalid_txids = block_info.invalid_txids.clone();
+        invalid_txids.sort();
+
         let block_vote = NakamotoBlockVote {
             signer_signature_hash: block_info.block.header.signer_signature_hash(),
             rejected: !block_info.valid.unwrap_or(false),
+            invalid_transactions: if invalid_txids.is_empty() {
+                None
+            } else {
+                Some(invalid_txids)
+            },
         };
         let block_vote_bytes = block_vote.serialize_to_vec();
         // Cache our vote
@@ -1660,3 +1717,4 @@ impl Signer {
         Ok(())
     }
 }
+

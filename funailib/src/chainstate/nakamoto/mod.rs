@@ -349,24 +349,41 @@ impl FromRow<NakamotoBlockHeader> for NakamotoBlockHeader {
 pub struct NakamotoBlockVote {
     pub signer_signature_hash: Sha512Trunc256Sum,
     pub rejected: bool,
+    pub invalid_transactions: Option<Vec<String>>,
 }
 
 impl FunaiMessageCodec for NakamotoBlockVote {
     fn consensus_serialize<W: std::io::Write>(&self, fd: &mut W) -> Result<(), CodecError> {
         write_next(fd, &self.signer_signature_hash)?;
         if self.rejected {
-            write_next(fd, &1u8)?;
+            if let Some(ref invalid_txs) = self.invalid_transactions {
+                write_next(fd, &2u8)?;
+                write_next(fd, invalid_txs)?;
+            } else {
+                write_next(fd, &1u8)?;
+            }
+        } else {
+            write_next(fd, &0u8)?;
         }
         Ok(())
     }
 
     fn consensus_deserialize<R: std::io::Read>(fd: &mut R) -> Result<Self, CodecError> {
         let signer_signature_hash = read_next(fd)?;
-        let rejected_byte: Option<u8> = read_next(fd).ok();
-        let rejected = rejected_byte.is_some();
+        let type_prefix: u8 = read_next(fd)?;
+        let (rejected, invalid_transactions) = match type_prefix {
+            0 => (false, None),
+            1 => (true, None),
+            2 => {
+                let invalid_txs = read_next(fd)?;
+                (true, Some(invalid_txs))
+            }
+            _ => return Err(CodecError::DeserializeError(format!("Unknown vote type prefix: {}", type_prefix))),
+        };
         Ok(Self {
             signer_signature_hash,
             rejected,
+            invalid_transactions,
         })
     }
 }

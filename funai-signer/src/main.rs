@@ -37,68 +37,71 @@ use funailib::chainstate::nakamoto::NakamotoBlock;
 use funailib::util_lib::signed_structured_data::pox4::make_pox_4_signer_key_signature;
 use clap::Parser;
 use clarity::vm::types::QualifiedContractIdentifier;
-use libsigner::{RunningSigner, Signer, SignerEventReceiver, SignerSession, FunaiDBSession, SignerEvent};
+use libsigner::{RunningSigner, Signer as SignerTrait, SignerEventReceiver, SignerSession, FunaiDBSession, SignerEvent};
 use libfunaidb::FunaiDBChunkData;
 use slog::{slog_debug, slog_error, slog_info};
-use funai_common::codec::read_next;
+use funai_common::codec::FunaiMessageCodec;
 use funai_common::types::chainstate::FunaiPrivateKey;
-use funai_common::util::hash::to_hex;
+use funai_common::util::hash::{to_hex, hex_bytes};
 use funai_common::util::secp256k1::{MessageSignature, Secp256k1PublicKey};
 use funai_common::{debug, error, info};
 use funai_signer::cli::{
     Cli, Command, GenerateFilesArgs, GenerateStackingSignatureArgs, GetChunkArgs,
-    GetLatestChunkArgs, PutChunkArgs, RunDkgArgs, RunSignerArgs, SignArgs, FunaiDBArgs,
-    RunInferenceServiceArgs,
+    GetLatestChunkArgs, PutChunkArgs, RunDkgArgs, RunSignerArgs, FunaiDBArgs,
+    RunInferenceServiceArgs, SignArgs
 };
 use funai_signer::config::{build_signer_config_tomls, GlobalConfig};
 use funai_signer::runloop::{RunLoop, RunLoopCommand};
-use funai_signer::signer::Command as SignerCommand;
+use funai_signer::signer::{Command as SignerCommand, Signer};
 use funai_signer::inference_service::InferenceService;
 use funai_signer::inference_api::InferenceApiServer;
-use tracing_subscriber::prelude::*;
-use tracing_subscriber::{fmt, EnvFilter};
 use wsts::state_machine::OperationResult;
-use tokio::sync::mpsc;
-use std::net::SocketAddr;
 
-struct SpawnedSigner {
-    running_signer: RunningSigner<SignerEventReceiver, Vec<OperationResult>>,
-    cmd_send: Sender<RunLoopCommand>,
-    res_recv: Receiver<Vec<OperationResult>>,
+/// Represents a spawned signer
+pub struct SpawnedSigner {
+    /// handle to join the spawned thread
+    pub running_signer: RunningSigner<SignerEventReceiver, Vec<OperationResult>>,
+    /// handle to send commands to the signer
+    pub cmd_send: Sender<RunLoopCommand>,
+    /// handle to receive results from the signer
+    pub res_recv: Receiver<Vec<OperationResult>>,
 }
 
-/// Create a new funai db session
-fn funaidb_session(host: &str, contract: QualifiedContractIdentifier) -> FunaiDBSession {
-    let mut session = FunaiDBSession::new(host, contract.clone());
-    session.connect(host.to_string(), contract).unwrap();
-    session
-}
+fn main() {
+    let cli = Cli::parse();
 
-/// Write the chunk to stdout
-fn write_chunk_to_stdout(chunk_opt: Option<Vec<u8>>) {
-    if let Some(chunk) = chunk_opt.as_ref() {
-        let bytes = io::stdout().write(chunk).unwrap();
-        if bytes < chunk.len() {
-            print!(
-                "Failed to write complete chunk to stdout. Missing {} bytes",
-                chunk.len() - bytes
-            );
+    match cli.command {
+        Command::Run(args) => handle_run(args),
+        Command::GenerateFiles(args) => handle_generate_files(args),
+        Command::GenerateStackingSignature(args) => {
+            let signature = handle_generate_stacking_signature(args, true);
+            println!("{}", to_hex(&signature.0));
+        }
+        Command::Dkg(args) => handle_run_dkg(args),
+        Command::Sign(args) => handle_run_sign(args),
+        Command::ListChunks(args) => handle_list_chunks(args),
+        Command::GetChunk(args) => handle_get_chunk_args(args),
+        Command::GetLatestChunk(args) => handle_get_latest_chunk_args(args),
+        Command::PutChunk(args) => handle_put_chunk_args(args),
+        Command::RunInferenceService(args) => handle_run_inference_service(args),
+        _ => {
+            println!("Command not implemented yet");
         }
     }
 }
 
-// Spawn a running signer and return its handle, command sender, and result receiver
 fn spawn_running_signer(path: &PathBuf, inference_task_sender: Option<tokio::sync::mpsc::Sender<SignerEvent>>) -> SpawnedSigner {
     let config = GlobalConfig::try_from(path).unwrap();
     let endpoint = config.endpoint;
-    info!("Starting signer with config: {}", config);
+    info!("Starting signer with config: {:?}", config);
     let (cmd_send, cmd_recv) = channel();
     let (res_send, res_recv) = channel();
     let ev = SignerEventReceiver::new(config.network.is_mainnet());
     let mut runloop = RunLoop::from(config);
     runloop.inference_task_sender = inference_task_sender;
-    let mut signer: Signer<RunLoopCommand, Vec<OperationResult>, RunLoop, SignerEventReceiver> =
-        Signer::new(runloop, ev, cmd_recv, res_send);
+    let signer: libsigner::Signer<RunLoopCommand, Vec<OperationResult>, RunLoop, SignerEventReceiver> =
+        SignerTrait::new(runloop, ev, cmd_recv, res_send);
+    let mut signer = signer;
     let running_signer = signer.spawn(endpoint).unwrap();
     SpawnedSigner {
         running_signer,
@@ -141,20 +144,17 @@ fn process_sign_result(sign_res: &[OperationResult]) {
     assert!(sign_res.len() == 1, "Received unexpected number of results");
     let sign = sign_res.first().unwrap();
     match sign {
-        OperationResult::Dkg(aggregate_key) => {
-            panic!("Received unexpected aggregate group key: {aggregate_key}");
-        }
         OperationResult::Sign(signature) => {
-            panic!(
-                "Received bood signature ({},{})",
-                &signature.R, &signature.z,
-            );
+            println!("Received signature (R,z) = ({},{})", &signature.R, &signature.z);
         }
         OperationResult::SignTaproot(schnorr_proof) => {
-            panic!(
-                "Received unexpected schnorr proof ({},{})",
-                &schnorr_proof.r, &schnorr_proof.s,
+            println!(
+                "Received schnorr proof (r,s) = ({},{})",
+                &schnorr_proof.r, &schnorr_proof.s
             );
+        }
+        OperationResult::Dkg(aggregate_key) => {
+            panic!("Received unexpected aggregate group key: {aggregate_key}");
         }
         OperationResult::DkgError(dkg_error) => {
             panic!("Received DkgError {}", dkg_error);
@@ -165,42 +165,11 @@ fn process_sign_result(sign_res: &[OperationResult]) {
     }
 }
 
-fn handle_get_chunk(args: GetChunkArgs) {
-    debug!("Getting chunk...");
-    let mut session = funaidb_session(&args.db_args.host, args.db_args.contract);
-    let chunk_opt = session.get_chunk(args.slot_id, args.slot_version).unwrap();
-    write_chunk_to_stdout(chunk_opt);
-}
-
-fn handle_get_latest_chunk(args: GetLatestChunkArgs) {
-    debug!("Getting latest chunk...");
-    let mut session = funaidb_session(&args.db_args.host, args.db_args.contract);
-    let chunk_opt = session.get_latest_chunk(args.slot_id).unwrap();
-    write_chunk_to_stdout(chunk_opt);
-}
-
-fn handle_list_chunks(args: FunaiDBArgs) {
-    debug!("Listing chunks...");
-    let mut session = funaidb_session(&args.host, args.contract);
-    let chunk_list = session.list_chunks().unwrap();
-    println!("{}", serde_json::to_string(&chunk_list).unwrap());
-}
-
-fn handle_put_chunk(args: PutChunkArgs) {
-    debug!("Putting chunk...");
-    let mut session = funaidb_session(&args.db_args.host, args.db_args.contract);
-    let mut chunk = FunaiDBChunkData::new(args.slot_id, args.slot_version, args.data);
-    chunk.sign(&args.private_key).unwrap();
-    let chunk_ack = session.put_chunk(&chunk).unwrap();
-    println!("{}", serde_json::to_string(&chunk_ack).unwrap());
-}
-
-fn handle_dkg(args: RunDkgArgs) {
-    debug!("Running DKG...");
+fn handle_run_dkg(args: RunDkgArgs) {
     let spawned_signer = spawn_running_signer(&args.config, None);
     let dkg_command = RunLoopCommand {
-        reward_cycle: args.reward_cycle,
         command: SignerCommand::Dkg,
+        reward_cycle: args.reward_cycle,
     };
     spawned_signer.cmd_send.send(dkg_command).unwrap();
     let dkg_res = spawned_signer.res_recv.recv().unwrap();
@@ -208,53 +177,26 @@ fn handle_dkg(args: RunDkgArgs) {
     spawned_signer.running_signer.stop();
 }
 
-fn handle_sign(args: SignArgs) {
-    debug!("Signing message...");
+fn handle_run_sign(args: SignArgs) {
     let spawned_signer = spawn_running_signer(&args.config, None);
-    let Some(block) = read_next::<NakamotoBlock, _>(&mut &args.data[..]).ok() else {
-        error!("Unable to parse provided message as a NakamotoBlock.");
-        spawned_signer.running_signer.stop();
-        return;
-    };
-    let sign_command = RunLoopCommand {
-        reward_cycle: args.reward_cycle,
-        command: SignerCommand::Sign {
-            block,
-            is_taproot: false,
-            merkle_root: None,
-        },
-    };
-    spawned_signer.cmd_send.send(sign_command).unwrap();
-    let sign_res = spawned_signer.res_recv.recv().unwrap();
-    process_sign_result(&sign_res);
-    spawned_signer.running_signer.stop();
-}
-
-fn handle_dkg_sign(args: SignArgs) {
-    debug!("Running DKG and signing message...");
-    let spawned_signer = spawn_running_signer(&args.config, None);
-    let Some(block) = read_next::<NakamotoBlock, _>(&mut &args.data[..]).ok() else {
-        error!("Unable to parse provided message as a NakamotoBlock.");
-        spawned_signer.running_signer.stop();
-        return;
-    };
     let dkg_command = RunLoopCommand {
-        reward_cycle: args.reward_cycle,
         command: SignerCommand::Dkg,
+        reward_cycle: args.reward_cycle,
     };
     let sign_command = RunLoopCommand {
-        reward_cycle: args.reward_cycle,
         command: SignerCommand::Sign {
-            block,
             is_taproot: false,
+            block: NakamotoBlock::consensus_deserialize(&mut hex_bytes(&to_hex(&args.data)).unwrap().as_slice())
+                .unwrap(),
             merkle_root: None,
         },
+        reward_cycle: args.reward_cycle,
     };
     // First execute DKG, then sign
     spawned_signer.cmd_send.send(dkg_command).unwrap();
-    spawned_signer.cmd_send.send(sign_command).unwrap();
     let dkg_res = spawned_signer.res_recv.recv().unwrap();
     process_dkg_result(&dkg_res);
+    spawned_signer.cmd_send.send(sign_command).unwrap();
     let sign_res = spawned_signer.res_recv.recv().unwrap();
     process_sign_result(&sign_res);
     spawned_signer.running_signer.stop();
@@ -315,6 +257,27 @@ fn handle_run(args: RunSignerArgs) {
     let _ = spawned_signer.running_signer.join();
 }
 
+fn handle_run_inference_service(args: RunInferenceServiceArgs) {
+    debug!("Running inference service...");
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let (_, signer_event_receiver) = tokio::sync::mpsc::channel(1000);
+    let db_path = args.database.unwrap_or_else(|| PathBuf::from("inference_tasks.db"));
+    let (mut inference_service, _) = InferenceService::new(signer_event_receiver, db_path);
+    let (api_event_sender, _) = tokio::sync::mpsc::channel(1000);
+    let api_server = InferenceApiServer::new(
+        Arc::new(Mutex::new(inference_service.get_shared_state())),
+        api_event_sender,
+    );
+    rt.spawn(async move {
+        inference_service.run().await;
+    });
+    rt.block_on(async {
+        if let Err(e) = api_server.start(args.api_port).await {
+            error!("API server error: {}", e);
+        }
+    });
+}
+
 fn handle_generate_files(args: GenerateFilesArgs) {
     debug!("Generating files...");
     let signer_funai_private_keys = if let Some(path) = args.private_keys {
@@ -367,325 +330,67 @@ fn handle_generate_stacking_signature(
 
     let signature = make_pox_4_signer_key_signature(
         &args.pox_address,
-        &private_key, //
-        args.reward_cycle.into(),
-        args.method.topic(),
+        &private_key,
+        args.reward_cycle as u128,
+        &args.method.topic(),
         config.network.to_chain_id(),
-        args.period.into(),
+        args.period as u128,
         args.max_amount,
         args.auth_id,
     )
     .expect("Failed to generate signature");
 
-    let output_str = if args.json {
-        serde_json::to_string(&serde_json::json!({
-            "signerKey": to_hex(&public_key.to_bytes_compressed()),
-            "signerSignature": to_hex(signature.to_rsv().as_slice()),
-            "authId": format!("{}", args.auth_id),
-            "rewardCycle": args.reward_cycle,
-            "maxAmount": format!("{}", args.max_amount),
-            "period": args.period,
-            "poxAddress": args.pox_address.to_b58(),
-            "method": args.method.topic().to_string(),
-        }))
-        .expect("Failed to serialize JSON")
-    } else {
-        format!(
-            "Signer Public Key: 0x{}\nSigner Key Signature: 0x{}\n\n",
-            to_hex(&public_key.to_bytes_compressed()),
-            to_hex(signature.to_rsv().as_slice()) // RSV is needed for Clarity
-        )
-    };
-
     if do_print {
-        println!("{}", output_str);
+        println!("{}", to_hex(&signature.0));
     }
 
     signature
 }
 
-fn handle_check_config(args: RunSignerArgs) {
-    let config = GlobalConfig::try_from(&args.config).unwrap();
-    println!("Configuration is valid: {}", config);
+fn handle_list_chunks(args: FunaiDBArgs) {
+    let rpc_socket = args.host;
+    let contract_id = args.contract;
+    let mut session = FunaiDBSession::new(&rpc_socket, contract_id);
+    let res = session.list_chunks().unwrap();
+    println!("Metadata listing: {:?}", res);
 }
 
-/// Handle running the inference transaction service
-async fn handle_run_inference_service(args: RunInferenceServiceArgs) {
-    debug!("Running inference service...");
-    
-    // Load configuration
-    let config = GlobalConfig::try_from(&args.config).unwrap();
-    debug!("Starting inference service with config: {}", config);
-    
-    // Create database path based on config directory or command line argument
-    let db_path = if let Some(db_arg) = args.database {
-        db_arg
-    } else {
-        let config_dir = args.config.parent().unwrap_or_else(|| std::path::Path::new("."));
-        config_dir.join("inference_tasks.db")
-    };
-    
-    // Create event channels for communication between signer and inference service
-    let (signer_event_sender, signer_event_receiver) = mpsc::channel(1000);
-    
-    // Create the inference service with database
-    let (mut inference_service, service_event_receiver) = InferenceService::new(
-        signer_event_receiver,
-        db_path,
-    );
-    
-    // Create a separate channel for API server events
-    let (api_event_sender, _api_event_receiver) = mpsc::channel(1000);
-    
-    // Create the API server with shared state
-    let api_server = InferenceApiServer::new(
-        Arc::new(Mutex::new(inference_service.get_shared_state())),
-        api_event_sender,
-    );
-    
-    println!("Inference service spawned successfully. Waiting for inference tasks to process...");
-    
-    // Spawn the inference service task
-    let inference_service_handle = tokio::spawn(async move {
-        inference_service.run().await;
-    });
-    
-    // Spawn the API server task
-    let api_server_handle = tokio::spawn(async move {
-        if let Err(e) = api_server.start(args.api_port).await {
-            error!("API server error: {}", e);
-        }
-    });
-    
-    // Wait for all tasks to complete
-    tokio::select! {
-        _ = inference_service_handle => {
-            debug!("Inference service task completed");
-        }
-        _ = api_server_handle => {
-            debug!("API server task completed");
-        }
+fn handle_get_chunk_args(args: GetChunkArgs) {
+    let mut session = FunaiDBSession::new(&args.db_args.host, args.db_args.contract);
+    let res = session
+        .get_chunks(&[(args.slot_id, args.slot_version)])
+        .unwrap();
+    let chunk = res.first().unwrap();
+    match chunk {
+        Some(data) => println!("{}", to_hex(data)),
+        None => println!("Chunk not found"),
     }
 }
 
-/// Helper function for writing the given contents to filename in the given directory
-fn write_file(dir: &Path, filename: &str, contents: &str) {
-    let file_path = dir.join(filename);
-    let filename = file_path.to_str().unwrap();
-    let mut file = File::create(filename).unwrap();
+fn handle_get_latest_chunk_args(args: GetLatestChunkArgs) {
+    let mut session = FunaiDBSession::new(&args.db_args.host, args.db_args.contract);
+    let res = session.get_latest_chunks(&[args.slot_id]).unwrap();
+    let chunk = res.first().unwrap();
+    match chunk {
+        Some(data) => println!("{}", to_hex(data)),
+        None => println!("Chunk not found"),
+    }
+}
+
+fn handle_put_chunk_args(args: PutChunkArgs) {
+    let mut session = FunaiDBSession::new(&args.db_args.host, args.db_args.contract);
+    let mut chunk = FunaiDBChunkData::new(
+        args.slot_id,
+        args.slot_version,
+        args.data,
+    );
+    chunk.sign(&args.private_key).unwrap();
+    let res = session.put_chunk(&chunk).unwrap();
+    println!("Chunk put successful: {:?}", res);
+}
+
+fn write_file(dir: &PathBuf, filename: &str, contents: &str) {
+    let path = dir.join(filename);
+    let mut file = File::create(path).unwrap();
     file.write_all(contents.as_bytes()).unwrap();
-    println!("Created file: {}", filename);
-}
-
-fn main() {
-    let cli = Cli::parse();
-
-    tracing_subscriber::registry()
-        .with(fmt::layer())
-        .with(EnvFilter::from_default_env())
-        .init();
-
-    match cli.command {
-        Command::GetChunk(args) => {
-            handle_get_chunk(args);
-        }
-        Command::GetLatestChunk(args) => {
-            handle_get_latest_chunk(args);
-        }
-        Command::ListChunks(args) => {
-            handle_list_chunks(args);
-        }
-        Command::PutChunk(args) => {
-            handle_put_chunk(args);
-        }
-        Command::Dkg(args) => {
-            handle_dkg(args);
-        }
-        Command::DkgSign(args) => {
-            handle_dkg_sign(args);
-        }
-        Command::Sign(args) => {
-            handle_sign(args);
-        }
-        Command::Run(args) => {
-            handle_run(args);
-        }
-        Command::GenerateFiles(args) => {
-            handle_generate_files(args);
-        }
-        Command::GenerateStackingSignature(args) => {
-            handle_generate_stacking_signature(args, true);
-        }
-        Command::CheckConfig(args) => {
-            handle_check_config(args);
-        }
-        Command::RunInferenceService(args) => {
-            // Create tokio runtime for async operations
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.block_on(handle_run_inference_service(args));
-        }
-    }
-}
-
-#[cfg(test)]
-pub mod tests {
-    use funailib::chainstate::funai::address::PoxAddress;
-    use funailib::chainstate::funai::boot::POX_4_CODE;
-    use funailib::util_lib::signed_structured_data::pox4::{
-        make_pox_4_signer_key_message_hash, Pox4SignatureTopic,
-    };
-    use clarity::vm::{execute_v2, Value};
-    use funai_common::consts::CHAIN_ID_TESTNET;
-    use funai_common::types::PublicKey;
-    use funai_common::util::secp256k1::Secp256k1PublicKey;
-    use funai_signer::cli::parse_pox_addr;
-
-    use super::{handle_generate_stacking_signature, *};
-    use crate::{GenerateStackingSignatureArgs, GlobalConfig};
-
-    fn call_verify_signer_sig(
-        pox_addr: &PoxAddress,
-        reward_cycle: u128,
-        topic: &Pox4SignatureTopic,
-        lock_period: u128,
-        public_key: &Secp256k1PublicKey,
-        signature: Vec<u8>,
-        amount: u128,
-        max_amount: u128,
-        auth_id: u128,
-    ) -> bool {
-        let program = format!(
-            r#"
-            {}
-            (verify-signer-key-sig {} u{} "{}" u{} (some 0x{}) 0x{} u{} u{} u{})
-        "#,
-            &*POX_4_CODE,                                               //s
-            Value::Tuple(pox_addr.clone().as_clarity_tuple().unwrap()), //p
-            reward_cycle,
-            topic.get_name_str(),
-            lock_period,
-            to_hex(signature.as_slice()),
-            to_hex(public_key.to_bytes_compressed().as_slice()),
-            amount,
-            max_amount,
-            auth_id,
-        );
-        execute_v2(&program)
-            .expect("FATAL: could not execute program")
-            .expect("Expected result")
-            .expect_result_ok()
-            .expect("Expected ok result")
-            .expect_bool()
-            .expect("Expected buff")
-    }
-
-    #[test]
-    fn test_stacking_signature_with_pox_code() {
-        let config = GlobalConfig::load_from_file("./src/tests/conf/signer-0.toml").unwrap();
-        let btc_address = "bc1p8vg588hldsnv4a558apet4e9ff3pr4awhqj2hy8gy6x2yxzjpmqsvvpta4";
-        let mut args = GenerateStackingSignatureArgs {
-            config: "./src/tests/conf/signer-0.toml".into(),
-            pox_address: parse_pox_addr(btc_address).unwrap(),
-            reward_cycle: 6,
-            method: Pox4SignatureTopic::StackStx.into(),
-            period: 12,
-            max_amount: u128::MAX,
-            auth_id: 1,
-            json: false,
-        };
-
-        let signature = handle_generate_stacking_signature(args.clone(), false);
-        let public_key = Secp256k1PublicKey::from_private(&config.funai_private_key);
-
-        let valid = call_verify_signer_sig(
-            &args.pox_address,
-            args.reward_cycle.into(),
-            &Pox4SignatureTopic::StackStx,
-            args.period.into(),
-            &public_key,
-            signature.to_rsv(),
-            100,
-            args.max_amount,
-            args.auth_id,
-        );
-        assert!(valid);
-
-        // change up some args
-        args.period = 6;
-        args.method = Pox4SignatureTopic::AggregationCommit.into();
-        args.reward_cycle = 7;
-        args.auth_id = 2;
-        args.max_amount = 100;
-
-        let signature = handle_generate_stacking_signature(args.clone(), false);
-        let public_key = Secp256k1PublicKey::from_private(&config.funai_private_key);
-
-        let valid = call_verify_signer_sig(
-            &args.pox_address,
-            args.reward_cycle.into(),
-            &Pox4SignatureTopic::AggregationCommit,
-            args.period.into(),
-            &public_key,
-            signature.to_rsv(),
-            100,
-            args.max_amount,
-            args.auth_id,
-        );
-        assert!(valid);
-    }
-
-    #[test]
-    fn test_generate_stacking_signature() {
-        let config = GlobalConfig::load_from_file("./src/tests/conf/signer-0.toml").unwrap();
-        let btc_address = "bc1p8vg588hldsnv4a558apet4e9ff3pr4awhqj2hy8gy6x2yxzjpmqsvvpta4";
-        let args = GenerateStackingSignatureArgs {
-            config: "./src/tests/conf/signer-0.toml".into(),
-            pox_address: parse_pox_addr(btc_address).unwrap(),
-            reward_cycle: 6,
-            method: Pox4SignatureTopic::StackStx.into(),
-            period: 12,
-            max_amount: u128::MAX,
-            auth_id: 1,
-            json: false,
-        };
-
-        let signature = handle_generate_stacking_signature(args.clone(), false);
-
-        let public_key = Secp256k1PublicKey::from_private(&config.funai_private_key);
-
-        let message_hash = make_pox_4_signer_key_message_hash(
-            &args.pox_address,
-            args.reward_cycle.into(),
-            &Pox4SignatureTopic::StackStx,
-            CHAIN_ID_TESTNET,
-            args.period.into(),
-            args.max_amount,
-            args.auth_id,
-        );
-
-        let verify_result = public_key.verify(&message_hash.0, &signature);
-        assert!(verify_result.is_ok());
-        assert!(verify_result.unwrap());
-    }
-
-    #[test]
-    fn test_inference_service_creation() {
-        use std::path::PathBuf;
-        use tokio::sync::mpsc;
-        use libsigner::InferModelType;
-        use funai_signer::inference_service::InferenceService;
-
-        // Create a temporary database path
-        let temp_dir = std::env::temp_dir();
-        let db_path = temp_dir.join("test_inference.db");
-
-        // Create event channel
-        let (tx, rx) = mpsc::channel(100);
-        
-        // Test creating inference service
-        let (service, _event_rx) = InferenceService::new(rx, db_path);
-        
-        // Verify service was created successfully
-        assert_eq!(service.get_task_statistics().total_tasks, 0);
-    }
 }

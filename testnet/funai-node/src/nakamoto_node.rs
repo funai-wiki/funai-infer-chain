@@ -96,6 +96,7 @@ pub enum Error {
     MiningFailure(ChainstateError),
     MinerSignatureError(&'static str),
     SignerSignatureError(String),
+    SignerFilterError(Vec<String>),
     /// A failure occurred while configuring the miner thread
     MinerConfigurationFailed(&'static str),
     /// An error occurred while operating as the signing coordinator

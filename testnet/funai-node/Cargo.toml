@@ -26,6 +26,7 @@ funai-common = { path = "../../funai-common" }
 chrono = "0.4.19"
 regex = "1"
 libsigner = { path = "../../libsigner" }
+libllm = { path = "../../libllm" }
 wsts = { workspace = true }
 rand = { workspace = true }
 rand_core = { workspace = true }

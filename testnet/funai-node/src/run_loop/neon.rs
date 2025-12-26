@@ -636,7 +636,7 @@ impl RunLoop {
     /// Get the sortition DB's highest block height, aligned to a reward cycle boundary, and the
     /// highest sortition.
     /// Returns (height at rc start, sortition)
-    fn get_reward_cycle_sortition_db_height(
+    pub fn get_reward_cycle_sortition_db_height(
         sortdb: &SortitionDB,
         burnchain_config: &Burnchain,
     ) -> (u64, BlockSnapshot) {

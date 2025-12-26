@@ -71,7 +71,8 @@ define_u8_enum![ValidateRejectCode {
     BadTransaction = 1,
     InvalidBlock = 2,
     ChainstateError = 3,
-    UnknownParent = 4
+    UnknownParent = 4,
+    BadTransactions = 5
 }];
 
 impl TryFrom<u8> for ValidateRejectCode {
@@ -100,12 +101,14 @@ pub struct BlockValidateReject {
     pub signer_signature_hash: Sha512Trunc256Sum,
     pub reason: String,
     pub reason_code: ValidateRejectCode,
+    pub invalid_transactions: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BlockValidateRejectReason {
     pub reason: String,
     pub reason_code: ValidateRejectCode,
+    pub invalid_transactions: Option<Vec<String>>,
 }
 
 impl<T> From<T> for BlockValidateRejectReason
@@ -117,6 +120,7 @@ where
         Self {
             reason: format!("Chainstate Error: {ce}"),
             reason_code: ValidateRejectCode::ChainstateError,
+            invalid_transactions: None,
         }
     }
 }
@@ -130,6 +134,14 @@ pub struct BlockValidateOk {
     pub size: u64,
 }
 
+/// A response for block proposal validation
+///  that the funai-node thinks is acceptable with some transactions filtered.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BlockValidateFilter {
+    pub signer_signature_hash: Sha512Trunc256Sum,
+    pub invalid_transactions: Vec<String>,
+}
+
 /// This enum is used for serializing the response to block
 /// proposal validation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -137,14 +149,31 @@ pub struct BlockValidateOk {
 pub enum BlockValidateResponse {
     Ok(BlockValidateOk),
     Reject(BlockValidateReject),
+    Filter(BlockValidateFilter),
 }
 
 impl From<Result<BlockValidateOk, BlockValidateReject>> for BlockValidateResponse {
     fn from(value: Result<BlockValidateOk, BlockValidateReject>) -> Self {
         match value {
             Ok(o) => BlockValidateResponse::Ok(o),
-            Err(e) => BlockValidateResponse::Reject(e),
+            Err(e) => {
+                if let Some(invalid_txs) = &e.invalid_transactions {
+                    if !invalid_txs.is_empty() && e.reason_code == ValidateRejectCode::BadTransactions {
+                        return BlockValidateResponse::Filter(BlockValidateFilter {
+                            signer_signature_hash: e.signer_signature_hash,
+                            invalid_transactions: invalid_txs.clone(),
+                        });
+                    }
+                }
+                BlockValidateResponse::Reject(e)
+            },
         }
+    }
+}
+
+impl From<BlockValidateFilter> for BlockValidateResponse {
+    fn from(value: BlockValidateFilter) -> Self {
+        BlockValidateResponse::Filter(value)
     }
 }
 
@@ -174,8 +203,9 @@ impl NakamotoBlockProposal {
                             signer_signature_hash: self.block.header.signer_signature_hash(),
                             reason_code: reason.reason_code,
                             reason: reason.reason,
+                            invalid_transactions: reason.invalid_transactions,
                         });
-                receiver.notify_proposal_result(result);
+                receiver.notify_proposal_result(BlockValidateResponse::from(result));
             })
     }
 
@@ -203,6 +233,7 @@ impl NakamotoBlockProposal {
             return Err(BlockValidateRejectReason {
                 reason_code: ValidateRejectCode::InvalidBlock,
                 reason: "Wrong network/chain_id".into(),
+                invalid_transactions: None,
             });
         }
 
@@ -215,6 +246,7 @@ impl NakamotoBlockProposal {
             return Err(BlockValidateRejectReason {
                 reason_code: ValidateRejectCode::UnknownParent,
                 reason: "Failed to find parent expected burns".into(),
+                invalid_transactions: None,
             });
         };
 
@@ -235,6 +267,7 @@ impl NakamotoBlockProposal {
         .ok_or_else(|| BlockValidateRejectReason {
             reason_code: ValidateRejectCode::InvalidBlock,
             reason: "Invalid parent block".into(),
+            invalid_transactions: None,
         })?;
         let tenure_change = self
             .block
@@ -291,6 +324,7 @@ impl NakamotoBlockProposal {
                 return Err(BlockValidateRejectReason {
                     reason,
                     reason_code: ValidateRejectCode::BadTransaction,
+                    invalid_transactions: Some(vec![tx.txid().to_hex()]),
                 });
             }
         }
@@ -320,6 +354,7 @@ impl NakamotoBlockProposal {
             return Err(BlockValidateRejectReason {
                 reason: "Block hash is not as expected".into(),
                 reason_code: ValidateRejectCode::BadBlockHash,
+                invalid_transactions: None,
             });
         }
 

@@ -1464,47 +1464,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "funai-node"
-version = "0.1.0"
-dependencies = [
- "async-h1",
- "async-std",
- "backtrace",
- "base64 0.12.3",
- "chrono",
- "clarity",
- "funai-common",
- "funai-genesis",
- "funai-signer",
- "funailib",
- "hashbrown 0.14.5",
- "http-types",
- "lazy_static",
- "libc",
- "libllm",
- "libsigner",
- "mutants",
- "pico-args",
- "rand 0.8.5",
- "rand_core 0.6.4",
- "regex",
- "reqwest 0.11.27",
- "ring 0.16.20",
- "rusqlite",
- "serde",
- "serde_derive",
- "serde_json",
- "slog",
- "tikv-jemallocator",
- "tokio",
- "toml 0.5.11",
- "tracing",
- "tracing-subscriber",
- "warp",
- "wsts",
-]
-
-[[package]]
 name = "funai-signer"
 version = "0.0.1"
 dependencies = [
@@ -2259,6 +2218,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "64e9829a50b42bb782c1df523f78d332fe371b10c661e78b7a3c34b0198e9fac"
 
 [[package]]
+name = "infer-node"
+version = "0.1.0"
+dependencies = [
+ "clap 4.5.20",
+ "funai-common",
+ "funailib",
+ "libllm",
+ "log",
+ "reqwest 0.11.27",
+ "serde",
+ "serde_json",
+ "slog",
+ "slog-async",
+ "slog-term",
+ "tokio",
+ "toml 0.5.11",
+ "uuid",
+]
+
+[[package]]
 name = "inout"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2574,6 +2553,47 @@ checksum = "f7c44f8e672c00fe5308fa235f821cb4198414e1c77935c1ab6948d3fd78550e"
 dependencies = [
  "mime",
  "unicase",
+]
+
+[[package]]
+name = "miner-node"
+version = "0.1.0"
+dependencies = [
+ "async-h1",
+ "async-std",
+ "backtrace",
+ "base64 0.12.3",
+ "chrono",
+ "clarity",
+ "funai-common",
+ "funai-genesis",
+ "funai-signer",
+ "funailib",
+ "hashbrown 0.14.5",
+ "http-types",
+ "lazy_static",
+ "libc",
+ "libllm",
+ "libsigner",
+ "mutants",
+ "pico-args",
+ "rand 0.8.5",
+ "rand_core 0.6.4",
+ "regex",
+ "reqwest 0.11.27",
+ "ring 0.16.20",
+ "rusqlite",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "slog",
+ "tikv-jemallocator",
+ "tokio",
+ "toml 0.5.11",
+ "tracing",
+ "tracing-subscriber",
+ "warp",
+ "wsts",
 ]
 
 [[package]]

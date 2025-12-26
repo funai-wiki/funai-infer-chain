@@ -1016,6 +1016,8 @@ pub enum BlockResponse {
     Accepted((Sha512Trunc256Sum, ThresholdSignature)),
     /// The Nakamoto block was rejected and therefore not signed
     Rejected(BlockRejection),
+    /// The Nakamoto block was partially accepted, but some transactions should be filtered
+    Filter(BlockFilter),
 }
 
 impl std::fmt::Display for BlockResponse {
@@ -1035,6 +1037,13 @@ impl std::fmt::Display for BlockResponse {
                     r.reason_code, r.reason, r.signer_signature_hash
                 )
             }
+            BlockResponse::Filter(filter) => {
+                write!(
+                    f,
+                    "BlockFilter: signer_sighash = {}, invalid_txs = {:?}",
+                    filter.signer_signature_hash, filter.invalid_transactions
+                )
+            }
         }
     }
 }
@@ -1052,6 +1061,14 @@ impl BlockResponse {
             RejectCode::SignedRejection(ThresholdSignature(sig)),
         ))
     }
+
+    /// Create a new filter BlockResponse
+    pub fn filter(hash: Sha512Trunc256Sum, invalid_transactions: Vec<String>) -> Self {
+        Self::Filter(BlockFilter {
+            signer_signature_hash: hash,
+            invalid_transactions,
+        })
+    }
 }
 
 impl FunaiMessageCodec for BlockResponse {
@@ -1065,6 +1082,10 @@ impl FunaiMessageCodec for BlockResponse {
             BlockResponse::Rejected(rejection) => {
                 write_next(fd, &1u8)?;
                 write_next(fd, rejection)?;
+            }
+            BlockResponse::Filter(filter) => {
+                write_next(fd, &2u8)?;
+                write_next(fd, filter)?;
             }
         };
         Ok(())
@@ -1082,6 +1103,10 @@ impl FunaiMessageCodec for BlockResponse {
                 let rejection = read_next::<BlockRejection, _>(fd)?;
                 BlockResponse::Rejected(rejection)
             }
+            2 => {
+                let filter = read_next::<BlockFilter, _>(fd)?;
+                BlockResponse::Filter(filter)
+            }
             _ => {
                 return Err(CodecError::DeserializeError(format!(
                     "Unknown block response type prefix: {}",
@@ -1090,6 +1115,32 @@ impl FunaiMessageCodec for BlockResponse {
             }
         };
         Ok(response)
+    }
+}
+
+/// A filter response from a signer for a proposed block
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BlockFilter {
+    /// The signer signature hash of the block that was filtered
+    pub signer_signature_hash: Sha512Trunc256Sum,
+    /// The invalid transactions that should be filtered
+    pub invalid_transactions: Vec<String>,
+}
+
+impl FunaiMessageCodec for BlockFilter {
+    fn consensus_serialize<W: Write>(&self, fd: &mut W) -> Result<(), CodecError> {
+        write_next(fd, &self.signer_signature_hash)?;
+        write_next(fd, &self.invalid_transactions)?;
+        Ok(())
+    }
+
+    fn consensus_deserialize<R: Read>(fd: &mut R) -> Result<Self, CodecError> {
+        let signer_signature_hash = read_next::<Sha512Trunc256Sum, _>(fd)?;
+        let invalid_transactions = read_next::<Vec<String>, _>(fd)?;
+        Ok(Self {
+            signer_signature_hash,
+            invalid_transactions,
+        })
     }
 }
 /// A rejection response from a signer for a proposed block

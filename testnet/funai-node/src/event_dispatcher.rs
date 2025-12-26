@@ -688,8 +688,8 @@ struct ProposalCallbackHandler {
 }
 
 impl ProposalCallbackReceiver for ProposalCallbackHandler {
-    fn notify_proposal_result(&self, result: Result<BlockValidateOk, BlockValidateReject>) {
-        let response = match serde_json::to_value(BlockValidateResponse::from(result)) {
+    fn notify_proposal_result(&self, result: BlockValidateResponse) {
+        let response = match serde_json::to_value(result) {
             Ok(x) => x,
             Err(e) => {
                 error!(
