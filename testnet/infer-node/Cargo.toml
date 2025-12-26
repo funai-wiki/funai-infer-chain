@@ -12,6 +12,8 @@ libllm = { path = "../../libllm" }
 funai-common = { path = "../../funai-common" }
 funailib = { path = "../../funailib" }
 log = "0.4"
+env_logger = "0.10"
+hex = "0.4.3"
 slog = { version = "2.5.2", features = ["max_level_trace"] }
 slog-term = "2.6.0"
 slog-async = "2.8.0"
