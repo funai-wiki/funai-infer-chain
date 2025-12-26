@@ -97,4 +97,7 @@ coverage.lcov
 .github
 testnet/funai-node/conf/fai-testnet-miner-conf.toml.not_commit
 testnet/funai-node/conf/fai-testnet-signer-config.toml.not_commit
+testnet/funai-node/conf/fai-testnet-infer-conf.toml.not_commit
 llm.sqlite
+
+funai-sdk
