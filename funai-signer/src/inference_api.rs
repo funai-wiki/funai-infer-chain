@@ -95,8 +95,8 @@ pub struct SubmitTaskRequest {
     pub infer_fee: u64,
     /// Maximum inference time (seconds)
     pub max_infer_time: u64,
-    /// Model type
-    pub model_type: String,
+    /// Model name
+    pub model_name: String,
     /// Signed transaction hex (optional)
     pub signed_tx: Option<String>,
 }
@@ -132,8 +132,8 @@ pub struct TaskStatusResponse {
     pub user_input: String,
     /// Context information
     pub context: String,
-    /// Model type
-    pub model_type: String,
+    /// Model name
+    pub model_name: String,
     /// Maximum inference time
     pub max_infer_time: u64,
     /// Inference fee
@@ -171,8 +171,8 @@ pub struct GetTaskResponse {
     pub user_input: String,
     /// Context information
     pub context: String,
-    /// Model type
-    pub model_type: String,
+    /// Model name
+    pub model_name: String,
     /// Maximum inference time
     pub max_infer_time: u64,
     /// Inference fee
@@ -338,7 +338,7 @@ impl InferenceApiServer {
                     request.nonce.unwrap_or(0),
                     request.infer_fee,
                     request.max_infer_time,
-                    self.parse_model_type(&request.model_type),
+                    self.parse_model_type(&request.model_name),
                     request.signed_tx,
                 );
 
