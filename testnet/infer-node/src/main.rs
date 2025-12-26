@@ -70,7 +70,7 @@ struct TaskResponse {
     task_id: String,
     user_input: String,
     context: String,
-    model_type: String,
+    model_name: String,
     max_infer_time: u64,
     infer_fee: u64,
     signed_tx: Option<String>,
@@ -130,7 +130,7 @@ async fn submit_result_to_signer(client: &reqwest::Client, config: &Config, task
     Ok(())
 }
 
-async fn submit_tx_to_miner(client: &reqwest::Client, config: &Config, task: &TaskResponse) -> Result<(), Box<dyn error::Error>> {
+async fn submit_tx_to_miner(client: &reqwest::Client, config: &Config, task: &TaskResponse) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(signed_tx_hex) = &task.signed_tx {
         info!("Submitting infer transaction to Miner...");
         let url = format!("{}/v2/transactions", config.miner_endpoint);

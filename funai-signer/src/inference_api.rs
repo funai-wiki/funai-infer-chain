@@ -479,7 +479,7 @@ impl InferenceApiServer {
                     task_id: task.task_id,
                     user_input: task.user_input,
                     context: task.context,
-                    model_type: format!("{:?}", task.model_type),
+                    model_name: format!("{:?}", task.model_type),
                     max_infer_time: task.max_infer_time,
                     infer_fee: task.infer_fee,
                     signed_tx: task.signed_tx,
