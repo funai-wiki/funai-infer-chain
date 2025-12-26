@@ -84,6 +84,10 @@ pub const STACKS_BLOCK_VERSION_AST_PRECHECK_SIZE: u8 = 1;
 pub const MAX_BLOCK_LEN: u32 = 2 * 1024 * 1024;
 pub const MAX_TRANSACTION_LEN: u32 = MAX_BLOCK_LEN;
 
+pub fn get_null_principal() -> PrincipalData {
+    PrincipalData::Standard(StandardPrincipalData(0, [0u8; 20]))
+}
+
 #[derive(Debug)]
 pub enum Error {
     InvalidFee,

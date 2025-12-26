@@ -5,6 +5,7 @@ use std::path::Path;
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     pub node_id: String,
+    pub node_address: String,
     pub signer_endpoint: String,
     pub miner_endpoint: String,
     pub supported_models: Vec<String>,

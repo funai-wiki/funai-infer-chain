@@ -850,8 +850,19 @@ impl FunaiTransaction {
 
     /// a txid of a funai transaction is its sha512/256 hash
     pub fn txid(&self) -> Txid {
+        let mut tx = self.clone();
+        if let TransactionPayload::Infer(from, amount, input, context, _, model) = tx.payload {
+            tx.payload = TransactionPayload::Infer(
+                from,
+                amount,
+                input,
+                context,
+                super::get_null_principal(),
+                model,
+            );
+        }
         let mut bytes = vec![];
-        self.consensus_serialize(&mut bytes)
+        tx.consensus_serialize(&mut bytes)
             .expect("BUG: failed to serialize to a vec");
         Txid::from_funai_tx(&bytes)
     }

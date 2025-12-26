@@ -952,6 +952,17 @@ impl Signer {
                             match infer_res {
                                 Ok(infer_res) => {
                                     info!("Infer res for tx {txid}: {infer_res:?}");
+                                    
+                                    // Verify node_principal matches the worker assigned by the Signer
+                                    if let TransactionPayload::Infer(_, _, _, _, ref node_principal, _) = tx.payload {
+                                        let node_addr = node_principal.to_string();
+                                        if node_addr != infer_res.inference_node_id {
+                                            warn!("Node principal mismatch for tx {txid}: expected {}, found {}", infer_res.inference_node_id, node_addr);
+                                            invalid_txids.push(txid);
+                                            continue;
+                                        }
+                                    }
+
                                     if !matches!(infer_res.status, libllm::InferStatus::Success) {
                                         warn!("Infer res isn't ok for tx {txid}: {infer_res:?}");
                                         invalid_txids.push(txid);

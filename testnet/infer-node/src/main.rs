@@ -3,7 +3,9 @@ use log::{error, info, warn};
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::time::sleep;
-use uuid::Uuid;
+use funailib::chainstate::funai::{FunaiTransaction, TransactionPayload};
+use funailib::chainstate::funai::codec::FunaiMessageCodec;
+use clarity::vm::types::PrincipalData;
 
 mod config;
 use config::Config;
@@ -136,9 +138,26 @@ async fn submit_tx_to_miner(client: &reqwest::Client, config: &Config, task: &Ta
         let url = format!("{}/v2/transactions", config.miner_endpoint);
         let tx_bytes = hex::decode(signed_tx_hex)?;
         
+        // Deserialize the transaction
+        let mut reader = &tx_bytes[..];
+        let (mut tx, _) = FunaiTransaction::consensus_deserialize_with_len(&mut reader)
+            .map_err(|e| format!("Failed to deserialize transaction: {}", e))?;
+        
+        // Set the actual node_principal who completed the task
+        if let TransactionPayload::Infer(from, amount, input, context, _, model) = tx.payload {
+            let node_principal = PrincipalData::parse(&config.node_address)
+                .map_err(|e| format!("Invalid node_address in config: {}", e))?;
+            tx.payload = TransactionPayload::Infer(from, amount, input, context, node_principal, model);
+        }
+        
+        // Re-serialize the transaction with the assigned worker address
+        let mut new_tx_bytes = vec![];
+        tx.consensus_serialize(&mut new_tx_bytes)
+            .map_err(|e| format!("Failed to re-serialize transaction: {}", e))?;
+        
         let resp = client.post(&url)
             .header("Content-Type", "application/octet-stream")
-            .body(tx_bytes)
+            .body(new_tx_bytes)
             .send()
             .await?;
 
