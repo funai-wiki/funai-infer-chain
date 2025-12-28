@@ -34,7 +34,7 @@ use funailib::net::api::postblock_proposal::{BlockValidateResponse, ValidateReje
 use hashbrown::HashSet;
 use libsigner::{
     BlockProposalSigners, BlockRejection, BlockResponse, MessageSlotID, RejectCode, SignerEvent,
-    SignerMessage, SubmitInferTask,
+    SignerMessage,
 };
 use serde_derive::{Deserialize, Serialize};
 use slog::{slog_debug, slog_error, slog_info, slog_warn};

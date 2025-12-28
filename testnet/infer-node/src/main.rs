@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tokio::time::sleep;
 use funailib::chainstate::funai::{FunaiTransaction, TransactionPayload};
-use funailib::chainstate::funai::codec::FunaiMessageCodec;
+use funai_common::codec::FunaiMessageCodec;
 use clarity::vm::types::PrincipalData;
 
 mod config;
@@ -172,4 +172,3 @@ async fn submit_tx_to_miner(client: &reqwest::Client, config: &Config, task: &Ta
     }
     Ok(())
 }
-

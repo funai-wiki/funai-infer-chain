@@ -96,7 +96,7 @@ pub async fn infer(user_input: &str, context_messages: Option<Vec<ChatCompletion
         .json(&request_body)
         .send()
         .await?;
-
+    
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_else(|e| format!("Failed to read body: {}", e));
@@ -241,6 +241,7 @@ pub struct InferResult {
     pub input: String,
     pub output: String,
     pub output_hash: String,
+    pub inference_node_id: String,
 }
 
 
@@ -266,6 +267,7 @@ pub fn query(txid: String) -> Result<InferResult, Box<dyn error::Error>> {
         input: result.input,
         output: result.output,
         output_hash: result.output_hash,
+        inference_node_id: result.inference_node_id,
     })
 }
 
@@ -293,6 +295,7 @@ pub fn query_hash(txid: String) -> Result<InferResult, Box<dyn error::Error>> {
             #[derive(Deserialize)]
             struct SignerTaskResponse {
                 pub status: String,
+                pub model_name: String,
                 pub result: Option<serde_json::Value>,
             }
             #[derive(Deserialize)]
@@ -309,11 +312,13 @@ pub fn query_hash(txid: String) -> Result<InferResult, Box<dyn error::Error>> {
                         "in_progress" => InferStatus::InProgress,
                         _ => InferStatus::Created,
                     };
-                    let output_hash = if let Some(res) = task.result {
-                        // Assuming the result contains output_hash
-                        res.get("output_hash").and_then(|v| v.as_str()).unwrap_or("").to_string()
+                    let (output_hash, node_id) = if let Some(res) = task.result {
+                        (
+                            res.get("output_hash").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                            res.get("inference_node_id").and_then(|v| v.as_str()).unwrap_or("").to_string()
+                        )
                     } else {
-                        "".to_string()
+                        ("".to_string(), "".to_string())
                     };
                     return Ok(InferResult {
                         txid,
@@ -321,6 +326,7 @@ pub fn query_hash(txid: String) -> Result<InferResult, Box<dyn error::Error>> {
                         input: "".to_string(),
                         output: "".to_string(),
                         output_hash,
+                        inference_node_id: node_id,
                     });
                 }
             }
@@ -335,6 +341,7 @@ pub fn query_hash(txid: String) -> Result<InferResult, Box<dyn error::Error>> {
         input: "".to_string(),
         output: "".to_string(),
         output_hash: result.output_hash,
+        inference_node_id: result.inference_node_id,
     })
 }
 
@@ -349,12 +356,14 @@ pub async fn _internal_do_infer() -> Result<(), Box<dyn error::Error>>{
     let result = infer(row.input.as_str(), None).await;
     if !result.is_ok() {
         error!("infer error: {:?}", result.err());
-        db::sqlite_end_llm(&llm_db, row.txid.as_str(), "", "", InferStatus::Failure as u8)?;
+        db::sqlite_end_llm(&llm_db, row.txid.as_str(), "", "", InferStatus::Failure as u8, "")?;
     } else {
         let output = result.unwrap();
         info!("output: {}", output);
         let output_hash = hex::encode(Sha256Sum::from_data(output.as_bytes()));
-        db::sqlite_end_llm(&llm_db, row.txid.as_str(), output.as_str(), output_hash.as_str(), InferStatus::Success as u8)?;
+        // Note: when doing local infer via _internal_do_infer, we don't have a specific node_id here
+        // unless it is passed in. For now using empty string or a default.
+        db::sqlite_end_llm(&llm_db, row.txid.as_str(), output.as_str(), output_hash.as_str(), InferStatus::Success as u8, "")?;
     }
     Ok(())
 }

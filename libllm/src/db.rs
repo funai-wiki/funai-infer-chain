@@ -19,7 +19,8 @@ pub struct ResultRow {
     pub status: u8,
     pub create_time: String,
     pub start_time: String,
-    pub end_time: String
+    pub end_time: String,
+    pub inference_node_id: String,
 }
 
 use std::sync::RwLock;
@@ -46,9 +47,25 @@ pub fn initialize_conn(conn: &Connection) -> Result<(), Box<dyn error::Error>> {
                   (txid TEXT PRIMARY KEY, context TEXT default '', input TEXT default '',
                    output TEXT default '', output_hash TEXT default '',
                    status INTEGER, create_time TEXT default '',
-                   start_time TEXT default '', end_time TEXT default '')",
+                   start_time TEXT default '', end_time TEXT default '',
+                   inference_node_id TEXT default '')",
         NO_PARAMS,
     )?;
+
+    // Handle migration if column doesn't exist
+    let mut stmt = conn.prepare("PRAGMA table_info(result_table)")?;
+    let mut rows = stmt.query(NO_PARAMS)?;
+    let mut has_node_id = false;
+    while let Some(row) = rows.next()? {
+        let name: String = row.get(1)?;
+        if name == "inference_node_id" {
+            has_node_id = true;
+            break;
+        }
+    }
+    if !has_node_id {
+        conn.execute("ALTER TABLE result_table ADD COLUMN inference_node_id TEXT default ''", NO_PARAMS)?;
+    }
 
     let sql = "SELECT sql FROM sqlite_master WHERE name=?";
     let _: String = conn
@@ -81,10 +98,10 @@ pub fn sqlite_start_llm(conn: &Connection, txid: &str, status: u8) -> Result<(),
     Ok(())
 }
 
-pub fn sqlite_end_llm(conn: &Connection, txid: &str, output: &str, output_hash: &str, status: u8) -> Result<(), Box<dyn error::Error>> {
-    let params: [&dyn ToSql; 4] = [&txid, &output, &output_hash, &status];
+pub fn sqlite_end_llm(conn: &Connection, txid: &str, output: &str, output_hash: &str, status: u8, node_id: &str) -> Result<(), Box<dyn error::Error>> {
+    let params: [&dyn ToSql; 5] = [&txid, &output, &output_hash, &status, &node_id];
     conn.execute(
-        "UPDATE result_table SET output = ?2, output_hash = ?3, status = ?4, end_time = datetime('now') WHERE txid = ?1",
+        "UPDATE result_table SET output = ?2, output_hash = ?3, status = ?4, end_time = datetime('now'), inference_node_id = ?5 WHERE txid = ?1",
         &params,
     )?;
     Ok(())
@@ -93,7 +110,7 @@ pub fn sqlite_end_llm(conn: &Connection, txid: &str, output: &str, output_hash: 
 pub fn sqlite_get(conn: &Connection, txid: &str) -> Result<ResultRow, Box<dyn error::Error>> {
     let params: [&dyn ToSql; 1] = [&txid];
     let result = conn.query_row(
-        "SELECT txid, context, input, output, output_hash, status, create_time, start_time, end_time FROM result_table WHERE txid = ?",
+        "SELECT txid, context, input, output, output_hash, status, create_time, start_time, end_time, inference_node_id FROM result_table WHERE txid = ?",
         &params,
         |row| {
             Ok( ResultRow {
@@ -106,6 +123,7 @@ pub fn sqlite_get(conn: &Connection, txid: &str) -> Result<ResultRow, Box<dyn er
                 create_time: row.get(6)?,
                 start_time: row.get(7)?,
                 end_time: row.get(8)?,
+                inference_node_id: row.get(9)?,
             })
         }
     );
@@ -121,6 +139,7 @@ pub fn sqlite_get(conn: &Connection, txid: &str) -> Result<ResultRow, Box<dyn er
             create_time: "".to_string(),
             start_time: "".to_string(),
             end_time: "".to_string(),
+            inference_node_id: "".to_string(),
         }),
         Err(e) => Err(Box::new(e)),
     }
@@ -128,7 +147,7 @@ pub fn sqlite_get(conn: &Connection, txid: &str) -> Result<ResultRow, Box<dyn er
 
 pub fn sqlite_filter_to_infer(conn: &Connection) -> Result<ResultRow, Box<dyn error::Error>> {
     let result = conn.query_row(
-        "SELECT txid, context, input, output, output_hash, status, create_time, start_time, end_time FROM result_table WHERE status = ? OR status = ? ORDER BY create_time",
+        "SELECT txid, context, input, output, output_hash, status, create_time, start_time, end_time, inference_node_id FROM result_table WHERE status = ? OR status = ? ORDER BY create_time",
         params![1u32, 4u8],
         |row| {
             Ok( ResultRow {
@@ -141,6 +160,7 @@ pub fn sqlite_filter_to_infer(conn: &Connection) -> Result<ResultRow, Box<dyn er
                 create_time: row.get(6)?,
                 start_time: row.get(7)?,
                 end_time: row.get(8)?,
+                inference_node_id: row.get(9)?,
             })
         }
     )?;
