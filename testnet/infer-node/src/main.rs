@@ -17,14 +17,38 @@ struct Args {
     config: PathBuf,
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let args = Args::parse();
     let config = Config::from_file(&args.config)?;
 
     info!("Starting Infer Node: {}", config.node_id);
 
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async {
+        // Run the node logic in a spawned task to allow for future parallel tasks (like an API server)
+        // and graceful shutdown handling.
+        let node_handle = tokio::spawn(async move {
+            if let Err(e) = run_node(config).await {
+                error!("Node execution error: {}", e);
+            }
+        });
+
+        // Wait for Ctrl+C or node completion
+        tokio::select! {
+            _ = node_handle => {
+                info!("Node task finished");
+            }
+            _ = tokio::signal::ctrl_c() => {
+                info!("Received Ctrl+C, shutting down...");
+            }
+        }
+        
+        Ok(())
+    })
+}
+
+async fn run_node(config: Config) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let client = reqwest::Client::new();
 
     // 1. Register with Signer
@@ -34,13 +58,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         if let Some(task) = poll_for_task(&client, &config).await? {
             info!("Received task: {}", task.task_id);
-            
+
             // 3. Do Inference
             let result = execute_inference(&task).await;
-            
+
             // 4. Submit result back to Signer
             submit_result_to_signer(&client, &config, &task.task_id, result).await?;
-            
+
             // 5. Submit Infer TX to Miner
             submit_tx_to_miner(&client, &config, &task).await?;
         }
@@ -49,7 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-async fn register_with_signer(client: &reqwest::Client, config: &Config) -> Result<(), Box<dyn std::error::Error>> {
+async fn register_with_signer(client: &reqwest::Client, config: &Config) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let url = format!("{}/api/v1/nodes/register", config.signer_endpoint);
     let body = serde_json::json!({
         "node_id": config.node_id,
@@ -58,13 +82,38 @@ async fn register_with_signer(client: &reqwest::Client, config: &Config) -> Resu
         "supported_models": config.supported_models,
     });
 
-    let resp = client.post(&url).json(&body).send().await?;
-    if resp.status().is_success() {
-        info!("Successfully registered with Signer");
-    } else {
-        error!("Failed to register with Signer: {:?}", resp.status());
+    // Retry registration with exponential backoff
+    let mut retries = 0;
+    let max_retries = 10;
+    loop {
+        match client.post(&url).json(&body).send().await {
+            Ok(resp) => {
+                if resp.status().is_success() {
+                    info!("Successfully registered with Signer");
+                    return Ok(());
+                } else {
+                    let status = resp.status();
+                    let error_text = resp.text().await.unwrap_or_default();
+                    error!("Failed to register with Signer: {} - {}", status, error_text);
+                    if retries >= max_retries {
+                        return Err(format!("Failed to register after {} retries: {}", max_retries, status).into());
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("Failed to connect to Signer at {}: {}. Retrying... ({}/{})", 
+                      config.signer_endpoint, e, retries + 1, max_retries);
+                if retries >= max_retries {
+                    return Err(format!("Failed to connect to Signer after {} retries: {}", max_retries, e).into());
+                }
+            }
+        }
+        
+        retries += 1;
+        let backoff = Duration::from_secs(2_u64.pow(retries.min(5))); // Max 32 seconds
+        info!("Retrying registration in {:?}...", backoff);
+        sleep(backoff).await;
     }
-    Ok(())
 }
 
 #[derive(serde::Deserialize, Debug)]
@@ -85,7 +134,7 @@ struct ApiResponse<T> {
     error: Option<String>,
 }
 
-async fn poll_for_task(client: &reqwest::Client, config: &Config) -> Result<Option<TaskResponse>, Box<dyn std::error::Error>> {
+async fn poll_for_task(client: &reqwest::Client, config: &Config) -> Result<Option<TaskResponse>, Box<dyn std::error::Error + Send + Sync>> {
     let url = format!("{}/api/v1/nodes/{}/tasks", config.signer_endpoint, config.node_id);
     let resp = client.get(&url).send().await?;
 
@@ -114,7 +163,7 @@ async fn execute_inference(task: &TaskResponse) -> String {
     }
 }
 
-async fn submit_result_to_signer(client: &reqwest::Client, config: &Config, task_id: &str, output: String) -> Result<(), Box<dyn std::error::Error>> {
+async fn submit_result_to_signer(client: &reqwest::Client, config: &Config, task_id: &str, output: String) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let url = format!("{}/api/v1/tasks/complete", config.signer_endpoint);
     let body = serde_json::json!({
         "task_id": task_id,
@@ -132,29 +181,29 @@ async fn submit_result_to_signer(client: &reqwest::Client, config: &Config, task
     Ok(())
 }
 
-async fn submit_tx_to_miner(client: &reqwest::Client, config: &Config, task: &TaskResponse) -> Result<(), Box<dyn std::error::Error>> {
+async fn submit_tx_to_miner(client: &reqwest::Client, config: &Config, task: &TaskResponse) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if let Some(signed_tx_hex) = &task.signed_tx {
         info!("Submitting infer transaction to Miner...");
         let url = format!("{}/v2/transactions", config.miner_endpoint);
         let tx_bytes = hex::decode(signed_tx_hex)?;
-        
+
         // Deserialize the transaction
         let mut reader = &tx_bytes[..];
         let (mut tx, _) = FunaiTransaction::consensus_deserialize_with_len(&mut reader)
             .map_err(|e| format!("Failed to deserialize transaction: {}", e))?;
-        
+
         // Set the actual node_principal who completed the task
         if let TransactionPayload::Infer(from, amount, input, context, _, model) = tx.payload {
             let node_principal = PrincipalData::parse(&config.node_address)
                 .map_err(|e| format!("Invalid node_address in config: {}", e))?;
             tx.payload = TransactionPayload::Infer(from, amount, input, context, node_principal, model);
         }
-        
+
         // Re-serialize the transaction with the assigned worker address
         let mut new_tx_bytes = vec![];
         tx.consensus_serialize(&mut new_tx_bytes)
             .map_err(|e| format!("Failed to re-serialize transaction: {}", e))?;
-        
+
         let resp = client.post(&url)
             .header("Content-Type", "application/octet-stream")
             .body(new_tx_bytes)

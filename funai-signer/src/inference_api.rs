@@ -230,7 +230,7 @@ impl InferenceApiServer {
         let method = req.method();
         let path = req.uri().path();
 
-        info!("Received {} request to {}", method, path);
+        debug!("Received {} request to {}", method, path);
 
         let response = match (method, path) {
             // Inference node registration

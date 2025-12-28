@@ -1,6 +1,8 @@
 node_id = "infer-node-1"
 node_address = "ST3PQBZFC9GZ9C97V6DP5EBSTB6TEHCHADZCDADEP"
-signer_endpoint = "http://127.0.0.1:20443"
+# Signer API endpoint (default port is 8080)
+signer_endpoint = "http://127.0.0.1:8080"
+# Miner RPC endpoint (default port is 20443)
 miner_endpoint = "http://127.0.0.1:20443"
 supported_models = ["llama-3", "gpt-4"]
 polling_interval_ms = 1000

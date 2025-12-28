@@ -327,7 +327,7 @@ impl EventReceiver for SignerEventReceiver {
                 return Ok(SignerEvent::StatusCheck);
             }
 
-            if request.method() != &HttpMethod::Post {
+            if request.method() != &HttpMethod::Post && request.method() != &HttpMethod::Get {
                 return Err(EventError::MalformedRequest(format!(
                     "Unrecognized method '{}'",
                     &request.method(),
