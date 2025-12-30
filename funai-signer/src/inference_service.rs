@@ -551,7 +551,7 @@ impl InferenceServiceState {
         let mut nodes = self.inference_nodes.lock().map_err(|e| e.to_string())?;
         
         if nodes.contains_key(&node.node_id) {
-            return Err("Node already registered".to_string());
+            info!("Node {} already registered, updating registration", node.node_id);
         }
 
         nodes.insert(node.node_id.clone(), node.clone());
