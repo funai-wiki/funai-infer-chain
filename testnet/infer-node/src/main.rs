@@ -43,7 +43,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 info!("Received Ctrl+C, shutting down...");
             }
         }
-        
+
         Ok(())
     })
 }
@@ -108,7 +108,7 @@ async fn register_with_signer(client: &reqwest::Client, config: &Config) -> Resu
                 }
             }
         }
-        
+
         retries += 1;
         let backoff = Duration::from_secs(2_u64.pow(retries.min(5))); // Max 32 seconds
         info!("Retrying registration in {:?}...", backoff);
@@ -191,13 +191,6 @@ async fn submit_tx_to_miner(client: &reqwest::Client, config: &Config, task: &Ta
         let mut reader = &tx_bytes[..];
         let (mut tx, _) = FunaiTransaction::consensus_deserialize_with_len(&mut reader)
             .map_err(|e| format!("Failed to deserialize transaction: {}", e))?;
-
-        // Set the actual node_principal who completed the task
-        if let TransactionPayload::Infer(from, amount, input, context, _, model) = tx.payload {
-            let node_principal = PrincipalData::parse(&config.node_address)
-                .map_err(|e| format!("Invalid node_address in config: {}", e))?;
-            tx.payload = TransactionPayload::Infer(from, amount, input, context, node_principal, model);
-        }
 
         // Re-serialize the transaction with the assigned worker address
         let mut new_tx_bytes = vec![];
