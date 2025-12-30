@@ -193,12 +193,11 @@ async fn submit_tx_to_miner(client: &reqwest::Client, config: &Config, task: &Ta
             .map_err(|e| format!("Failed to deserialize transaction: {}", e))?;
 
         // Set the actual node_principal who completed the task
-        // FIXME: Modifying payload invalidates the signature.
-        // if let TransactionPayload::Infer(from, amount, input, context, _, model) = tx.payload {
-        //    let node_principal = PrincipalData::parse(&config.node_address)
-        //        .map_err(|e| format!("Invalid node_address in config: {}", e))?;
-        //    tx.payload = TransactionPayload::Infer(from, amount, input, context, node_principal, model);
-        // }
+        if let TransactionPayload::Infer(from, amount, input, context, _, model) = tx.payload {
+            let node_principal = PrincipalData::parse(&config.node_address)
+                .map_err(|e| format!("Invalid node_address in config: {}", e))?;
+            tx.payload = TransactionPayload::Infer(from, amount, input, context, node_principal, model);
+        }
 
         // Re-serialize the transaction with the assigned worker address
         let mut new_tx_bytes = vec![];
