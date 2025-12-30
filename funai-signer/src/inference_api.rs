@@ -28,8 +28,13 @@ use crate::inference_service::{
     InferTask, InferTaskResult, InferTaskStatus, InferenceNode,
     InferenceServiceEvent, NodeStatus,
     InferenceServiceState,
+    InferenceService,
 };
 use serde_json::json;
+use funailib::chainstate::funai::transaction::FunaiTransaction;
+use funai_common::util::hash::hex_bytes;
+use funai_common::codec::FunaiMessageCodec;
+use std::io::Cursor;
 
 /// Generic API response wrapper
 #[derive(Serialize, Deserialize)]
@@ -325,6 +330,69 @@ impl InferenceApiServer {
     async fn handle_submit_task(&self, req: Request<Body>) -> Response<Body> {
         match self.parse_json_body::<SubmitTaskRequest>(req).await {
             Ok(request) => {
+                // Verify signed_tx
+                let signed_tx_hex = match request.signed_tx {
+                    Some(ref tx) => tx,
+                    None => {
+                        return self.json_response(
+                            ApiResponse::<String>::error("Missing signed_tx".to_string()),
+                            StatusCode::BAD_REQUEST,
+                        );
+                    }
+                };
+
+                let tx_bytes = match hex_bytes(signed_tx_hex) {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        return self.json_response(
+                            ApiResponse::<String>::error(format!("Invalid signed_tx hex: {}", e)),
+                            StatusCode::BAD_REQUEST,
+                        );
+                    }
+                };
+
+                let mut cursor = Cursor::new(&tx_bytes);
+                let tx = match FunaiTransaction::consensus_deserialize(&mut cursor) {
+                    Ok(tx) => tx,
+                    Err(e) => {
+                        return self.json_response(
+                            ApiResponse::<String>::error(format!("Failed to deserialize transaction: {}", e)),
+                            StatusCode::BAD_REQUEST,
+                        );
+                    }
+                };
+
+                if let Err(e) = tx.verify() {
+                    return self.json_response(
+                        ApiResponse::<String>::error(format!("Invalid transaction signature: {:?}", e)),
+                        StatusCode::BAD_REQUEST,
+                    );
+                }
+
+                let origin_address = tx.auth.origin().to_string();
+                if origin_address != request.user_address {
+                    return self.json_response(
+                        ApiResponse::<String>::error(format!(
+                            "Address mismatch: expected {}, got {}",
+                            request.user_address, origin_address
+                        )),
+                        StatusCode::UNAUTHORIZED,
+                    );
+                }
+
+                if let Some(nonce) = request.nonce {
+                    if tx.auth.nonce() != nonce {
+                        return self.json_response(
+                            ApiResponse::<String>::error(format!(
+                                "Nonce mismatch: expected {}, got {}",
+                                nonce,
+                                tx.auth.nonce()
+                            )),
+                            StatusCode::BAD_REQUEST,
+                        );
+                    }
+                }
+
                 let task_id = request.task_id.unwrap_or_else(|| {
                     format!("api-{}", uuid::Uuid::new_v4().to_string())
                 });
@@ -339,7 +407,7 @@ impl InferenceApiServer {
                     request.infer_fee,
                     request.max_infer_time,
                     self.parse_model_type(&request.model_name),
-                    request.signed_tx,
+                    request.signed_tx, // Pass the original Option<String>
                 );
 
                 let result = {
@@ -741,9 +809,10 @@ mod tests {
     }
 
     fn create_test_server() -> InferenceApiServer {
+        use crate::inference_service::InferenceService;
         let (event_receiver, _) = mpsc::channel(100);
         let (inference_service, _) = InferenceService::new(event_receiver, std::path::PathBuf::from("test.db"));
-        let (event_sender, _) = mpsc::channel(100);
+        let (event_sender, _) = mpsc::channel::<InferenceServiceEvent>(100);
         
         InferenceApiServer::new(Arc::new(Mutex::new(inference_service.get_shared_state())), event_sender)
     }
