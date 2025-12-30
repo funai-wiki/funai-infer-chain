@@ -18,7 +18,7 @@ use std::sync::mpsc::Sender;
 use std::time::Duration;
 
 use tokio::sync::mpsc::Sender as TokioSender;
-use libsigner::{SignerEntries, SignerEvent, SignerRunLoop, SubmitInferTask};
+use libsigner::{SignerEntries, SignerEvent, SignerRunLoop};
 use funailib::burnchains::PoxConstants;
 use funailib::chainstate::funai::boot::SIGNERS_NAME;
 use funailib::util_lib::boot::boot_code_id;

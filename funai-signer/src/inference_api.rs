@@ -28,10 +28,9 @@ use crate::inference_service::{
     InferTask, InferTaskResult, InferTaskStatus, InferenceNode,
     InferenceServiceEvent, NodeStatus,
     InferenceServiceState,
-    InferenceService,
 };
 use serde_json::json;
-use funailib::chainstate::funai::transaction::FunaiTransaction;
+use funailib::chainstate::funai::FunaiTransaction;
 use funai_common::util::hash::hex_bytes;
 use funai_common::codec::FunaiMessageCodec;
 use std::io::Cursor;
@@ -352,7 +351,7 @@ impl InferenceApiServer {
                 };
 
                 let mut cursor = Cursor::new(&tx_bytes);
-                let tx = match FunaiTransaction::consensus_deserialize(&mut cursor) {
+                let tx: FunaiTransaction = match FunaiTransaction::consensus_deserialize(&mut cursor) {
                     Ok(tx) => tx,
                     Err(e) => {
                         return self.json_response(
@@ -369,7 +368,8 @@ impl InferenceApiServer {
                     );
                 }
 
-                let origin_address = tx.auth.origin().to_string();
+                let origin = tx.auth.origin();
+                let origin_address = origin.address_mainnet().to_string();
                 if origin_address != request.user_address {
                     return self.json_response(
                         ApiResponse::<String>::error(format!(
@@ -381,12 +381,12 @@ impl InferenceApiServer {
                 }
 
                 if let Some(nonce) = request.nonce {
-                    if tx.auth.nonce() != nonce {
+                    if origin.nonce() != nonce {
                         return self.json_response(
                             ApiResponse::<String>::error(format!(
                                 "Nonce mismatch: expected {}, got {}",
                                 nonce,
-                                tx.auth.nonce()
+                                origin.nonce()
                             )),
                             StatusCode::BAD_REQUEST,
                         );
@@ -403,7 +403,7 @@ impl InferenceApiServer {
                     request.user_input,
                     request.context,
                     request.fee.unwrap_or(0),
-                    request.nonce.unwrap_or(0),
+                    request.nonce.unwrap_or(origin.nonce()),
                     request.infer_fee,
                     request.max_infer_time,
                     self.parse_model_type(&request.model_name),
@@ -810,8 +810,9 @@ mod tests {
 
     fn create_test_server() -> InferenceApiServer {
         use crate::inference_service::InferenceService;
-        let (event_receiver, _) = mpsc::channel(100);
-        let (inference_service, _) = InferenceService::new(event_receiver, std::path::PathBuf::from("test.db"));
+        use libsigner::SignerEvent;
+        let (_tx, rx) = mpsc::channel::<SignerEvent>(100);
+        let (inference_service, _) = InferenceService::new(rx, std::path::PathBuf::from("test.db"));
         let (event_sender, _) = mpsc::channel::<InferenceServiceEvent>(100);
         
         InferenceApiServer::new(Arc::new(Mutex::new(inference_service.get_shared_state())), event_sender)
