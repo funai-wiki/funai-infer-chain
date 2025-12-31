@@ -369,7 +369,7 @@ impl InferenceApiServer {
                 }
 
                 let origin = tx.auth.origin();
-                let origin_address = origin.address_mainnet().to_string();
+                let origin_address = tx.origin_address().to_string();
                 if origin_address != request.user_address {
                     return self.json_response(
                         ApiResponse::<String>::error(format!(
@@ -418,7 +418,7 @@ impl InferenceApiServer {
                 match result {
                     Ok(()) => {
                 // Notify via event sender
-                        if let Err(e) = self.event_sender.blocking_send(InferenceServiceEvent::TaskSubmitted(task_id.clone())) {
+                        if let Err(e) = self.event_sender.send(InferenceServiceEvent::TaskSubmitted(task_id.clone())).await {
                      error!("Failed to send task submitted event: {}", e);
                 }
 

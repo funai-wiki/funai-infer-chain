@@ -764,8 +764,8 @@ impl InferenceService {
         }
 
         // Send node registration event
-        if let Err(e) = self.event_sender.blocking_send(InferenceServiceEvent::NodeRegistered(node.node_id)) {
-            return Err(format!("Failed to send node registered event: {}", e));
+        if let Err(e) = self.event_sender.try_send(InferenceServiceEvent::NodeRegistered(node.node_id)) {
+            error!("Failed to send node registered event: {}", e);
         }
 
         Ok(())
@@ -797,8 +797,8 @@ impl InferenceService {
         }
 
         // Send node status update event
-        if let Err(e) = self.event_sender.blocking_send(InferenceServiceEvent::NodeStatusUpdated(node_id.to_string(), status)) {
-            return Err(format!("Failed to send node status update event: {}", e));
+        if let Err(e) = self.event_sender.try_send(InferenceServiceEvent::NodeStatusUpdated(node_id.to_string(), status)) {
+            error!("Failed to send node status update event: {}", e);
         }
 
         Ok(())
@@ -825,8 +825,8 @@ impl InferenceService {
                 }
 
                 // Send task completion event
-                if let Err(e) = self.event_sender.blocking_send(InferenceServiceEvent::TaskCompleted(task_id.to_string())) {
-                    return Err(format!("Failed to send task completion event: {}", e));
+                if let Err(e) = self.event_sender.try_send(InferenceServiceEvent::TaskCompleted(task_id.to_string())) {
+                    error!("Failed to send task completion event: {}", e);
                 }
             } else {
                 return Err(format!("Task {} not found in processing", task_id));
