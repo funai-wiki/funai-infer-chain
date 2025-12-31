@@ -601,7 +601,7 @@ impl InferenceServiceState {
         let tasks = db.load_all_tasks().map_err(|e| e.to_string())?;
         {
             let mut pending = self.pending_tasks.lock().map_err(|e| e.to_string())?;
-            let mut completed = self.completed_tasks.lock().map_err(|e| e.to_string())?;
+            let mut completed: std::sync::MutexGuard<'_, HashMap<String, InferTask>> = self.completed_tasks.lock().map_err(|e| e.to_string())?;
 
             for task in tasks {
                 match task.status {

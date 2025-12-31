@@ -5725,14 +5725,46 @@ impl FunaiChainState {
             let total_coinbase = coinbase_at_block.saturating_add(accumulated_rewards);
 
             // Adjust coinbase distribution for L2: if the block contains Infer txs,
-            // only 17.6% of coinbase goes to the L2 miner; otherwise 100% goes to miner.
-            let has_infer_txs = block
-                .txs
-                .iter()
-                .any(|tx| matches!(tx.payload, TransactionPayload::Infer(..)));
+            // 10% of coinbase goes to the L2 miner; 90% goes to inference nodes.
+            let mut infer_txs_fees: Vec<(u64, PrincipalData)> = vec![];
+            let mut total_infer_fee = 0u64;
+
+            for tx in block.txs.iter() {
+                if let TransactionPayload::Infer(_, amount, _, _, ref node_principal, _) = tx.payload {
+                    infer_txs_fees.push((amount, node_principal.clone()));
+                    total_infer_fee += amount;
+                }
+            }
+            
+            let has_infer_txs = !infer_txs_fees.is_empty();
+
             let miner_coinbase: u128 = if has_infer_txs {
-                // 17.6% of total_coinbase (integer math: * 176 / 1000)
-                total_coinbase.saturating_mul(176).saturating_div(1000)
+                // 10% of total_coinbase (integer math: * 10 / 100)
+                let miner_share = total_coinbase.saturating_mul(10).saturating_div(100);
+                
+                // Distribute 90% to inference nodes
+                let nodes_share = total_coinbase.saturating_sub(miner_share);
+                
+                if total_infer_fee > 0 {
+                    for (amount, node_principal) in infer_txs_fees {
+                        // Calculate node's share: nodes_share * (amount / total_infer_fee)
+                        let node_reward = nodes_share
+                            .saturating_mul(amount as u128)
+                            .saturating_div(total_infer_fee as u128);
+                        
+                        if node_reward > 0 {
+                             match clarity_tx.credit_stx_balance(
+                                 &node_principal,
+                                 node_reward,
+                             ) {
+                                 Ok(_) => info!("Credited {} uFunai to node {}", node_reward, node_principal),
+                                 Err(e) => error!("Failed to credit node reward: {:?}", e),
+                             }
+                        }
+                    }
+                }
+                
+                miner_share
             } else {
                 total_coinbase
             };
