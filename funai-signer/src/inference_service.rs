@@ -469,6 +469,81 @@ impl InferenceDatabase {
 
         Ok(nodes)
     }
+
+    /// Load all tasks from database
+    pub fn load_all_tasks(&self) -> SqliteResult<Vec<InferTask>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT task_id, user_address, user_input, context, fee, nonce, infer_fee,
+                    max_infer_time, model_type, signed_tx, status, created_at, updated_at,
+                    output, confidence, completed_at, inference_node_id
+             FROM inference_tasks"
+        )?;
+
+        let mut rows = stmt.query::<[&dyn rusqlite::ToSql; 0]>([])?;
+        let mut tasks = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            let task_id: String = row.get(0)?;
+            let user_address: String = row.get(1)?;
+            let user_input: String = row.get(2)?;
+            let context: String = row.get(3)?;
+            let fee: i64 = row.get(4)?;
+            let nonce: i64 = row.get(5)?;
+            let infer_fee: i64 = row.get(6)?;
+            let max_infer_time: i64 = row.get(7)?;
+            let model_type_str: String = row.get(8)?;
+            let signed_tx: Option<String> = row.get(9)?;
+            let status_str: String = row.get(10)?;
+            let created_at: i64 = row.get(11)?;
+            let updated_at: i64 = row.get(12)?;
+            let output: Option<String> = row.get(13)?;
+            let confidence: Option<f64> = row.get(14)?;
+            let completed_at: Option<i64> = row.get(15)?;
+            let inference_node_id: Option<String> = row.get(16)?;
+
+            let model_type = match model_type_str.as_str() {
+                "deepseek" => InferModelType::DeepSeek(None),
+                "llama" => InferModelType::Llama(None),
+                "mistral" => InferModelType::Mistral(None),
+                "gemma" => InferModelType::Gemma(None),
+                "gptneox" => InferModelType::GptNeoX(None),
+                _ => InferModelType::Unknown(None),
+            };
+
+            let status = InferTaskStatus::from_string(&status_str);
+
+            let result = if let (Some(output), Some(confidence), Some(completed_at), Some(node_id)) = 
+                (output, confidence, completed_at, inference_node_id) {
+                Some(InferTaskResult {
+                    output,
+                    confidence,
+                    completed_at: completed_at as u64,
+                    inference_node_id: node_id,
+                })
+            } else {
+                None
+            };
+
+            tasks.push(InferTask {
+                task_id,
+                user_address,
+                user_input,
+                context,
+                fee: fee as u64,
+                nonce: nonce as u64,
+                infer_fee: infer_fee as u64,
+                max_infer_time: max_infer_time as u64,
+                model_type,
+                signed_tx,
+                status,
+                created_at: created_at as u64,
+                updated_at: updated_at as u64,
+                result,
+            });
+        }
+
+        Ok(tasks)
+    }
 }
 
 /// Shared state for inference service that can be accessed by both the service and API server
@@ -493,13 +568,64 @@ impl InferenceServiceState {
             InferenceDatabase::new(&db_path).expect("Failed to create database")
         ));
 
-        Self {
+        let state = Self {
             pending_tasks: Arc::new(Mutex::new(HashMap::new())),
             processing_tasks: Arc::new(Mutex::new(HashMap::new())),
             completed_tasks: Arc::new(Mutex::new(HashMap::new())),
             inference_nodes: Arc::new(Mutex::new(HashMap::new())),
             database,
+        };
+
+        // Load data from database
+        if let Err(e) = state.load_from_database() {
+            error!("Failed to load data from database: {}", e);
         }
+
+        state
+    }
+
+    /// Load data from database into memory
+    pub fn load_from_database(&self) -> Result<(), String> {
+        let db = self.database.lock().map_err(|e| e.to_string())?;
+        
+        // Load nodes
+        let nodes = db.load_nodes().map_err(|e| e.to_string())?;
+        {
+            let mut nodes_map = self.inference_nodes.lock().map_err(|e| e.to_string())?;
+            for node in nodes {
+                nodes_map.insert(node.node_id.clone(), node);
+            }
+        }
+
+        // Load tasks
+        let tasks = db.load_all_tasks().map_err(|e| e.to_string())?;
+        {
+            let mut pending = self.pending_tasks.lock().map_err(|e| e.to_string())?;
+            let mut completed = self.completed_tasks.lock().map_err(|e| e.to_string())?;
+
+            for task in tasks {
+                match task.status {
+                    InferTaskStatus::Pending => {
+                        pending.insert(task.task_id.clone(), task);
+                    }
+                    InferTaskStatus::InProgress => {
+                        // If it was in progress when shut down, we might want to move it back to pending
+                        // or keep it in processing if we can resume. For now, move to pending to be safe.
+                        let mut task = task;
+                        task.status = InferTaskStatus::Pending;
+                        pending.insert(task.task_id.clone(), task);
+                    }
+                    InferTaskStatus::Completed | InferTaskStatus::Submitted => {
+                        completed.insert(task.task_id.clone(), task);
+                    }
+                    InferTaskStatus::Failed | InferTaskStatus::Timeout => {
+                        completed.insert(task.task_id.clone(), task);
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Get task status

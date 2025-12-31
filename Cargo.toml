@@ -27,13 +27,13 @@ wsts = { version = "9.0.0", default-features = false }
 # Use a bit more than default optimization for
 #  dev builds to speed up test execution
 [profile.dev]
-opt-level = 1
+opt-level = 0
 
 # Use release-level optimization for dependencies
 # This slows down "first" builds on development environments,
 #  but won't impact subsequent builds.
 [profile.dev.package."*"]
-opt-level = 3
+opt-level = 0
 
 [profile.release]
 debug = true
