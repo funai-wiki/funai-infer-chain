@@ -10,6 +10,7 @@ pub struct Config {
     pub miner_endpoint: String,
     pub supported_models: Vec<String>,
     pub polling_interval_ms: u64,
+    pub node_private_key: String,
     #[serde(default = "default_heartbeat_interval")]
     pub heartbeat_interval_ms: u64,
 }

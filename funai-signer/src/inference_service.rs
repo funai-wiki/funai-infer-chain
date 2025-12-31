@@ -676,7 +676,13 @@ impl InferenceServiceState {
     pub fn register_inference_node(&self, node: InferenceNode) -> Result<(), String> {
         let mut nodes = self.inference_nodes.lock().map_err(|e| e.to_string())?;
         
-        if nodes.contains_key(&node.node_id) {
+        if let Some(existing_node) = nodes.get(&node.node_id) {
+            if existing_node.public_key != node.public_key {
+                return Err(format!(
+                    "Node ID '{}' is already registered with a different public key. Registration denied.",
+                    node.node_id
+                ));
+            }
             info!("Node {} already registered, updating registration", node.node_id);
         }
 

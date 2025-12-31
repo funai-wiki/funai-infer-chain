@@ -6,6 +6,7 @@ use tokio::time::sleep;
 use funailib::chainstate::funai::{FunaiTransaction, TransactionPayload};
 use funai_common::codec::FunaiMessageCodec;
 use clarity::vm::types::PrincipalData;
+use funai_common::types::chainstate::{FunaiPrivateKey, FunaiPublicKey};
 
 mod config;
 use config::Config;
@@ -98,10 +99,19 @@ async fn run_node(config: Config) -> Result<(), Box<dyn std::error::Error + Send
 
 async fn register_with_signer(client: &reqwest::Client, config: &Config) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let url = format!("{}/api/v1/nodes/register", config.signer_endpoint);
+    
+    // Derive public key from private key
+    let mut priv_key = FunaiPrivateKey::from_hex(&config.node_private_key)
+        .map_err(|e| format!("Invalid node_private_key: {}", e))?;
+    // Stacks/Funai typically use compressed public keys
+    priv_key.set_compress_public(true);
+    let pub_key = FunaiPublicKey::from_private(&priv_key);
+    let pub_key_hex = pub_key.to_hex();
+
     let body = serde_json::json!({
         "node_id": config.node_id,
-        "endpoint": "http://localhost:8000", // Placeholder
-        "public_key": "node-public-key", // Placeholder
+        "endpoint": config.node_address,
+        "public_key": pub_key_hex,
         "supported_models": config.supported_models,
     });
 
