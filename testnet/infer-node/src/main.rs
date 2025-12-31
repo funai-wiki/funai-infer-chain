@@ -54,19 +54,42 @@ async fn run_node(config: Config) -> Result<(), Box<dyn std::error::Error + Send
     // 1. Register with Signer
     register_with_signer(&client, &config).await?;
 
+    let mut last_heartbeat = std::time::Instant::now() - Duration::from_millis(config.heartbeat_interval_ms);
+
     // 2. Main Loop
     loop {
-        if let Some(task) = poll_for_task(&client, &config).await? {
-            info!("Received task: {}", task.task_id);
+        // Send heartbeat if needed
+        if last_heartbeat.elapsed().as_millis() >= config.heartbeat_interval_ms as u128 {
+            if let Err(e) = send_heartbeat(&client, &config).await {
+                warn!("Failed to send heartbeat to Signer: {}. Signer might be down.", e);
+            } else {
+                last_heartbeat = std::time::Instant::now();
+            }
+        }
 
-            // 3. Do Inference
-            let result = execute_inference(&task).await;
+        match poll_for_task(&client, &config).await {
+            Ok(Some(task)) => {
+                info!("Received task: {}", task.task_id);
 
-            // 4. Submit result back to Signer
-            submit_result_to_signer(&client, &config, &task.task_id, result).await?;
+                // 3. Do Inference
+                let result = execute_inference(&task).await;
 
-            // 5. Submit Infer TX to Miner
-            submit_tx_to_miner(&client, &config, &task).await?;
+                // 4. Submit result back to Signer
+                if let Err(e) = submit_result_to_signer(&client, &config, &task.task_id, result).await {
+                    error!("Failed to submit result to Signer: {}", e);
+                }
+
+                // 5. Submit Infer TX to Miner
+                if let Err(e) = submit_tx_to_miner(&client, &config, &task).await {
+                    error!("Failed to submit transaction to Miner: {}", e);
+                }
+            }
+            Ok(None) => {
+                // No task available
+            }
+            Err(e) => {
+                warn!("Failed to poll for tasks from Signer: {}. Will retry...", e);
+            }
         }
 
         sleep(Duration::from_millis(config.polling_interval_ms)).await;
@@ -146,6 +169,20 @@ async fn poll_for_task(client: &reqwest::Client, config: &Config) -> Result<Opti
     }
 
     Ok(None)
+}
+
+async fn send_heartbeat(client: &reqwest::Client, config: &Config) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let url = format!("{}/api/v1/nodes/heartbeat", config.signer_endpoint);
+    let body = serde_json::json!({
+        "node_id": config.node_id,
+        "status": "online",
+    });
+
+    let resp = client.post(&url).json(&body).send().await?;
+    if !resp.status().is_success() {
+        return Err(format!("Heartbeat failed with status: {}", resp.status()).into());
+    }
+    Ok(())
 }
 
 async fn execute_inference(task: &TaskResponse) -> String {
