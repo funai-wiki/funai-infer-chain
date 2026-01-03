@@ -15,7 +15,7 @@ funai-common = { path = "../funai-common" }
 hex = "0.4.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-reqwest = { version = "0.11", features = ["json"] }
+reqwest = { version = "0.11", features = ["json", "blocking"] }
 k256 = { version = "0.13", features = ["ecdsa", "sha2"] }
 chrono = { version = "0.4.19", features = ["serde"] }
 

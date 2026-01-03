@@ -25,10 +25,12 @@ pub const INFER_CHECK_FAIL: i32 = 0;
 /// Generate signature headers for a request
 /// Returns (pubkey_hex, signature_hex, timestamp) or None if private key is not available
 fn generate_signature_headers(path: &str, body_json: &str) -> Option<(String, String, String)> {
-    // Get private key from environment variable
-    let priv_key_hex = std::env::var("STX_PRIVATE_KEY").ok()?;
+    // 1. Try to get private key from global setting
+    // 2. Fallback to environment variable STX_PRIVATE_KEY
+    let priv_key_hex = get_private_key()
+        .or_else(|| std::env::var("STX_PRIVATE_KEY").ok())?;
     
-    // Remove the last byte if it's a type marker (65 bytes -> 32 bytes)
+    // Remove the last byte if it's a type marker (e.g., 01 for compressed)
     let raw_priv_hex = if priv_key_hex.len() > 64 {
         &priv_key_hex[..64]
     } else {
@@ -106,6 +108,8 @@ pub async fn infer(user_input: &str, context_messages: Option<Vec<ChatCompletion
             ErrorKind::Other,
             format!("NON_200_STATUS {} body: {}", status, body),
         )));
+    } else {
+        info!("infer request succeeded: status: {}", response.status());
     }
 
     let payload: GenerateResponse = response.json().await?;
@@ -276,6 +280,16 @@ use lazy_static::lazy_static;
 
 lazy_static! {
     static ref SIGNER_URL: RwLock<Option<String>> = RwLock::new(None);
+    static ref PRIVATE_KEY: RwLock<Option<String>> = RwLock::new(None);
+}
+
+pub fn set_private_key(key: String) {
+    let mut priv_key = PRIVATE_KEY.write().unwrap();
+    *priv_key = Some(key);
+}
+
+pub fn get_private_key() -> Option<String> {
+    PRIVATE_KEY.read().unwrap().clone()
 }
 
 pub fn set_signer_url(url: String) {

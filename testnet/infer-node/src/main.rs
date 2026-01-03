@@ -1,5 +1,7 @@
+#[macro_use]
+extern crate slog;
+
 use clap::Parser;
-use log::{error, info, warn};
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -7,6 +9,7 @@ use funailib::chainstate::funai::{FunaiTransaction, TransactionPayload};
 use funai_common::codec::FunaiMessageCodec;
 use clarity::vm::types::PrincipalData;
 use funai_common::types::chainstate::{FunaiPrivateKey, FunaiPublicKey};
+use funai_common::{info, warn, error, debug}; // 使用统一的日志宏
 
 mod config;
 use config::Config;
@@ -19,7 +22,9 @@ struct Args {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    env_logger::init();
+    // 移除 env_logger::init(); 
+    // funai_common 的日志系统在第一次调用宏时会自动通过 lazy_static 初始化
+    
     let args = Args::parse();
     let config = Config::from_file(&args.config)?;
 
@@ -51,6 +56,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn run_node(config: Config) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let client = reqwest::Client::new();
+
+    // Set private key for libllm to use when signing requests
+    libllm::set_private_key(config.node_private_key.clone());
 
     // 1. Register with Signer
     register_with_signer(&client, &config).await?;
