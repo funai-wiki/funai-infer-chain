@@ -102,7 +102,6 @@ pub async fn infer(user_input: &str, context_messages: Option<Vec<ChatCompletion
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_else(|e| format!("Failed to read body: {}", e));
-        println!("infer request failed status: {}, body: {}", status, body);
         error!("infer request failed status: {}, body: {}", status, body);
         return Err(Box::new(Error::new(
             ErrorKind::Other,

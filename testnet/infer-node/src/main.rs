@@ -1,15 +1,12 @@
+use clap::Parser;
 #[macro_use]
 extern crate slog;
 
-use clap::Parser;
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::time::sleep;
-use funailib::chainstate::funai::{FunaiTransaction, TransactionPayload};
-use funai_common::codec::FunaiMessageCodec;
-use clarity::vm::types::PrincipalData;
 use funai_common::types::chainstate::{FunaiPrivateKey, FunaiPublicKey};
-use funai_common::{info, warn, error, debug}; // 使用统一的日志宏
+use funai_common::{info, warn, error}; // Removed unused imports
 
 mod config;
 use config::Config;
@@ -81,16 +78,22 @@ async fn run_node(config: Config) -> Result<(), Box<dyn std::error::Error + Send
                 info!("Received task: {}", task.task_id);
 
                 // 3. Do Inference
-                let result = execute_inference(&task).await;
+                match execute_inference(&task).await {
+                    Ok(result) => {
+                        // 4. Submit result back to Signer
+                        if let Err(e) = submit_result_to_signer(&client, &config, &task.task_id, result.clone()).await {
+                            error!("Failed to submit result to Signer: {}", e);
+                        }
 
-                // 4. Submit result back to Signer
-                if let Err(e) = submit_result_to_signer(&client, &config, &task.task_id, result.clone()).await {
-                    error!("Failed to submit result to Signer: {}", e);
-                }
-
-                // 5. Submit Infer TX to Miner (including the result as an attachment)
-                if let Err(e) = submit_tx_to_miner(&client, &config, &task, result).await {
-                    error!("Failed to submit transaction to Miner: {}", e);
+                        // 5. Submit Infer TX to Miner (including the result as an attachment)
+                        if let Err(e) = submit_tx_to_miner(&client, &config, &task, result).await {
+                            error!("Failed to submit transaction to Miner: {}", e);
+                        }
+                    }
+                    Err(e) => {
+                        error!("Task {} failed: {}. Skipping submission.", task.task_id, e);
+                        // Optional: Notify signer about failure here if there's a failure endpoint
+                    }
                 }
             }
             Ok(None) => {
@@ -203,17 +206,17 @@ async fn send_heartbeat(client: &reqwest::Client, config: &Config) -> Result<(),
     Ok(())
 }
 
-async fn execute_inference(task: &TaskResponse) -> String {
+async fn execute_inference(task: &TaskResponse) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     info!("Executing inference for task {}...", task.task_id);
     // Use libllm for inference
     match libllm::infer(&task.user_input, None).await {
         Ok(output) => {
             info!("Inference completed successfully");
-            output
+            Ok(output)
         }
         Err(e) => {
             error!("Inference failed: {}", e);
-            format!("Error: {}", e)
+            Err(e.to_string().into())
         }
     }
 }
