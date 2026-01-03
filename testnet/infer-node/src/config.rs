@@ -6,6 +6,7 @@ use std::path::Path;
 pub struct Config {
     pub node_id: String,
     pub node_address: String,
+    pub endpoint: String,
     pub signer_endpoint: String,
     pub miner_endpoint: String,
     pub supported_models: Vec<String>,

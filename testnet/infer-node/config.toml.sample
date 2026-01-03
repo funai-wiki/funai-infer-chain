@@ -1,5 +1,7 @@
 node_id = "infer-node-1"
 node_address = "xxx"
+# Infer Node service endpoint
+endpoint = "http://127.0.0.1:8000"
 # Signer API endpoint (default port is 8080)
 signer_endpoint = "http://127.0.0.1:8080"
 # Miner RPC endpoint (default port is 20443)

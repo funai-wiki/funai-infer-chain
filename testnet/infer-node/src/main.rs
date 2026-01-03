@@ -76,12 +76,12 @@ async fn run_node(config: Config) -> Result<(), Box<dyn std::error::Error + Send
                 let result = execute_inference(&task).await;
 
                 // 4. Submit result back to Signer
-                if let Err(e) = submit_result_to_signer(&client, &config, &task.task_id, result).await {
+                if let Err(e) = submit_result_to_signer(&client, &config, &task.task_id, result.clone()).await {
                     error!("Failed to submit result to Signer: {}", e);
                 }
 
-                // 5. Submit Infer TX to Miner
-                if let Err(e) = submit_tx_to_miner(&client, &config, &task).await {
+                // 5. Submit Infer TX to Miner (including the result as an attachment)
+                if let Err(e) = submit_tx_to_miner(&client, &config, &task, result).await {
                     error!("Failed to submit transaction to Miner: {}", e);
                 }
             }
@@ -110,7 +110,7 @@ async fn register_with_signer(client: &reqwest::Client, config: &Config) -> Resu
 
     let body = serde_json::json!({
         "node_id": config.node_id,
-        "endpoint": config.node_address,
+        "endpoint": config.endpoint,
         "public_key": pub_key_hex,
         "supported_models": config.supported_models,
     });
@@ -228,33 +228,28 @@ async fn submit_result_to_signer(client: &reqwest::Client, config: &Config, task
     Ok(())
 }
 
-async fn submit_tx_to_miner(client: &reqwest::Client, config: &Config, task: &TaskResponse) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn submit_tx_to_miner(client: &reqwest::Client, config: &Config, task: &TaskResponse, output: String) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if let Some(signed_tx_hex) = &task.signed_tx {
-        info!("Submitting infer transaction to Miner...");
+        info!("Submitting infer transaction to Miner with result attachment...");
         let url = format!("{}/v2/transactions", config.miner_endpoint);
-        let tx_bytes = hex::decode(signed_tx_hex)?;
-
-        // Deserialize the transaction
-        let mut reader = &tx_bytes[..];
-        let (mut tx, _) = FunaiTransaction::consensus_deserialize_with_len(&mut reader)
-            .map_err(|e| format!("Failed to deserialize transaction: {}", e))?;
-
-        // Re-serialize the transaction with the assigned worker address
-        let mut new_tx_bytes = vec![];
-        tx.consensus_serialize(&mut new_tx_bytes)
-            .map_err(|e| format!("Failed to re-serialize transaction: {}", e))?;
+        
+        // Wrap both the transaction and the inference result into a JSON body.
+        // Miner's /v2/transactions endpoint parses this into (tx, attachment).
+        let body = serde_json::json!({
+            "tx": signed_tx_hex,
+            "attachment": hex::encode(output.as_bytes())
+        });
 
         let resp = client.post(&url)
-            .header("Content-Type", "application/octet-stream")
-            .body(new_tx_bytes)
+            .json(&body)
             .send()
             .await?;
 
         if resp.status().is_success() {
             let txid = resp.text().await?;
-            info!("Successfully submitted transaction, TXID: {}", txid);
+            info!("Successfully submitted transaction and result, TXID: {}", txid);
         } else {
-            error!("Failed to submit transaction: {:?}", resp.status());
+            error!("Failed to submit transaction to Miner: {:?}", resp.status());
         }
     } else {
         warn!("No signed transaction provided for task {}", task.task_id);
