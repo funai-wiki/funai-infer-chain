@@ -5701,10 +5701,6 @@ impl FunaiChainState {
                    "microblock cost" => %microblock_execution_cost,
                    "block cost" => %block_cost);
 
-            // good to go!
-            let clarity_commit =
-                clarity_tx.precommit_to_block(chain_tip_consensus_hash, &block.block_hash());
-
             // figure out if there any accumulated rewards by
             //   getting the snapshot that elected this block.
             let accumulated_rewards = SortitionDB::get_block_snapshot_consensus(
@@ -5730,9 +5726,9 @@ impl FunaiChainState {
             let mut total_infer_fee = 0u64;
 
             for tx in block.txs.iter() {
-                if let TransactionPayload::Infer(_, amount, _, _, ref node_principal, _) = tx.payload {
-                    infer_txs_fees.push((amount, node_principal.clone()));
-                    total_infer_fee += amount;
+                if let TransactionPayload::Infer(_from, amount, _user_input, _context, ref node_principal, _model_name) = &tx.payload {
+                    infer_txs_fees.push((*amount, node_principal.clone()));
+                    total_infer_fee += *amount;
                 }
             }
             
@@ -5745,6 +5741,8 @@ impl FunaiChainState {
                 // Distribute 90% to inference nodes
                 let nodes_share = total_coinbase.saturating_sub(miner_share);
                 
+                // Collect all node rewards first
+                let mut node_rewards: Vec<(PrincipalData, u128)> = vec![];
                 if total_infer_fee > 0 {
                     for (amount, node_principal) in infer_txs_fees {
                         // Calculate node's share: nodes_share * (amount / total_infer_fee)
@@ -5753,21 +5751,34 @@ impl FunaiChainState {
                             .saturating_div(total_infer_fee as u128);
                         
                         if node_reward > 0 {
-                             match clarity_tx.credit_stx_balance(
-                                 &node_principal,
-                                 node_reward,
-                             ) {
-                                 Ok(_) => info!("Credited {} uFunai to node {}", node_reward, node_principal),
-                                 Err(e) => error!("Failed to credit node reward: {:?}", e),
-                             }
+                            node_rewards.push((node_principal, node_reward));
                         }
                     }
+                }
+                
+                // Apply all node rewards
+                for (node_principal, node_reward) in node_rewards {
+                    clarity_tx.connection().as_transaction(|clarity_conn| {
+                        clarity_conn.with_clarity_db(|ref mut db| {
+                            let mut snapshot = db.get_stx_balance_snapshot(&node_principal)?;
+                            snapshot.credit(node_reward)?;
+                            snapshot.save()?;
+                            info!("Credited {} uFunai to node {}", node_reward, node_principal);
+                            Ok(())
+                        })
+                    }).unwrap_or_else(|e| {
+                        error!("Failed to credit node reward: {:?}", e);
+                    });
                 }
                 
                 miner_share
             } else {
                 total_coinbase
             };
+
+            // good to go!
+            let clarity_commit =
+                clarity_tx.precommit_to_block(chain_tip_consensus_hash, &block.block_hash());
 
             // calculate reward for this block's miner
             let scheduled_miner_reward = FunaiChainState::make_scheduled_miner_reward(
@@ -6790,10 +6801,10 @@ impl FunaiChainState {
 
         // 6: payload-specific checks
         match &tx.payload {
-            TransactionPayload::Infer(from, amount, user_input, context, node_principal, model_name) => {
+            TransactionPayload::Infer(_from, _amount, _user_input, _context, _node_principal, _model_name) => {
                 // TODO do some infer check
             }
-            TransactionPayload::RegisterModel(model_name, model_params) => {
+            TransactionPayload::RegisterModel(_model_name, _model_params) => {
                 // Stateless accept here; POST path persists to libllm.
                 // Could add basic sanity checks on length if desired.
             }
