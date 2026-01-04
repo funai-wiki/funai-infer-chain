@@ -397,6 +397,23 @@ impl FunaiChainState {
         tx: &mut DBTx,
         block_reward: &MinerPaymentSchedule,
     ) -> Result<(), Error> {
+        Self::insert_payment_schedule(tx, block_reward, true, 0)
+    }
+
+    pub fn insert_inference_payment_schedule(
+        tx: &mut DBTx,
+        block_reward: &MinerPaymentSchedule,
+        vtxindex: u32,
+    ) -> Result<(), Error> {
+        Self::insert_payment_schedule(tx, block_reward, false, vtxindex)
+    }
+
+    fn insert_payment_schedule(
+        tx: &mut DBTx,
+        block_reward: &MinerPaymentSchedule,
+        is_miner: bool,
+        vtxindex: u32,
+    ) -> Result<(), Error> {
         assert!(block_reward.burnchain_commit_burn < i64::MAX as u64);
         assert!(block_reward.burnchain_sortition_burn < i64::MAX as u64);
         assert!(block_reward.funai_block_height < i64::MAX as u64);
@@ -426,8 +443,8 @@ impl FunaiChainState {
             &u64_to_sql(block_reward.burnchain_commit_burn)?,
             &u64_to_sql(block_reward.burnchain_sortition_burn)?,
             &u64_to_sql(block_reward.funai_block_height)?,
-            &true,
-            &0i64,
+            &is_miner,
+            &i64::from(vtxindex),
             &index_block_hash,
             &payment_type,
             &"0".to_string(),

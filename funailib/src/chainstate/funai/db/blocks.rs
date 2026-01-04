@@ -5520,6 +5520,7 @@ impl FunaiChainState {
 
         let (
             scheduled_miner_reward,
+            node_rewards,
             block_execution_cost,
             matured_rewards,
             miner_payouts_opt,
@@ -5734,6 +5735,11 @@ impl FunaiChainState {
             
             let has_infer_txs = !infer_txs_fees.is_empty();
 
+            // good to go!
+            let clarity_commit =
+                clarity_tx.precommit_to_block(chain_tip_consensus_hash, &block.block_hash());
+
+            let mut node_rewards: Vec<(PrincipalData, u128)> = vec![];
             let miner_coinbase: u128 = if has_infer_txs {
                 // 10% of total_coinbase (integer math: * 10 / 100)
                 let miner_share = total_coinbase.saturating_mul(10).saturating_div(100);
@@ -5741,11 +5747,8 @@ impl FunaiChainState {
                 // Distribute 90% to inference nodes
                 let nodes_share = total_coinbase.saturating_sub(miner_share);
                 
-                // Collect all node rewards first
-                let mut node_rewards: Vec<(PrincipalData, u128)> = vec![];
                 if total_infer_fee > 0 {
                     for (amount, node_principal) in infer_txs_fees {
-                        // Calculate node's share: nodes_share * (amount / total_infer_fee)
                         let node_reward = nodes_share
                             .saturating_mul(amount as u128)
                             .saturating_div(total_infer_fee as u128);
@@ -5755,30 +5758,10 @@ impl FunaiChainState {
                         }
                     }
                 }
-                
-                // Apply all node rewards
-                for (node_principal, node_reward) in node_rewards {
-                    clarity_tx.connection().as_transaction(|clarity_conn| {
-                        clarity_conn.with_clarity_db(|ref mut db| {
-                            let mut snapshot = db.get_stx_balance_snapshot(&node_principal)?;
-                            snapshot.credit(node_reward)?;
-                            snapshot.save()?;
-                            info!("Credited {} uFunai to node {}", node_reward, node_principal);
-                            Ok(())
-                        })
-                    }).unwrap_or_else(|e| {
-                        error!("Failed to credit node reward: {:?}", e);
-                    });
-                }
-                
                 miner_share
             } else {
                 total_coinbase
             };
-
-            // good to go!
-            let clarity_commit =
-                clarity_tx.precommit_to_block(chain_tip_consensus_hash, &block.block_hash());
 
             // calculate reward for this block's miner
             let scheduled_miner_reward = FunaiChainState::make_scheduled_miner_reward(
@@ -5806,6 +5789,7 @@ impl FunaiChainState {
 
             (
                 scheduled_miner_reward,
+                node_rewards,
                 block_cost,
                 matured_rewards,
                 miner_payouts_opt,
@@ -5871,6 +5855,23 @@ impl FunaiChainState {
             affirmation_weight,
         )
         .expect("FATAL: failed to advance chain tip");
+
+        // Record inference node rewards in the payment schedule so they mature later
+        for (i, (node_principal, node_reward)) in node_rewards.into_iter().enumerate() {
+            let mut node_schedule = scheduled_miner_reward.clone();
+            node_schedule.recipient = node_principal;
+            node_schedule.coinbase = node_reward;
+            // Fee is already handled by the miner reward, so we set fees to 0 for nodes
+            node_schedule.tx_fees = MinerPaymentTxFees::Epoch2 { anchored: 0, streamed: 0 };
+            
+            if let Err(e) = FunaiChainState::insert_inference_payment_schedule(
+                &mut chainstate_tx.tx,
+                &node_schedule,
+                (i + 1) as u32, // vtxindex 0 is for miner, 1+ for nodes
+            ) {
+                error!("Failed to insert inference payment schedule: {:?}", e);
+            }
+        }
 
         chainstate_tx.log_transactions_processed(&new_tip.index_block_hash(), &tx_receipts);
 
