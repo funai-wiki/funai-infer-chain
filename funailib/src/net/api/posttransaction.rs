@@ -247,29 +247,53 @@ impl RPCRequestHandler for RPCPostTransactionRequestHandler {
             };
 
             match tx.payload {
-                TransactionPayload::Infer(_, _, ref userInput, ref context, _, _) => { // submit infer task to local llm server if the tx type is infer
+                TransactionPayload::Infer(_, _, ref userInput, ref context, ref nodePrincipal, _) => {
                     let txid_str = txid.to_hex();
                     let user_input = userInput.to_string();
-                    let context_str = context.to_string();
-                    let chat_completion_message = serde_json::from_str(context_str.as_str()).unwrap_or(vec![]);
-                    let context_messages = if chat_completion_message.is_empty() {
-                        None
-                    } else {
-                        Some(chat_completion_message)
-                    };
-                    let submit_infer_res = libllm::infer_chain(txid_str.clone(), user_input.as_str(), context_messages);
-                    match submit_infer_res {
-                        Ok(infer_res) => {
-                            debug!("Infer result: {:?}", infer_res);
-                        }
 
-                        Err(e) => {
-                            let err_msg = format!("tx:{:?} infer failed:{:?}", txid_str, e.to_string());
-                            error!("{}", err_msg);
-                            return Err(FunaiHttpResponse::new_error(
-                                &preamble,
-                                &HttpBadRequest::new(err_msg),
-                            ));
+                    // Check if an attachment (inference result) was provided
+                    let result_saved = if let Some(ref attachment) = attachment_opt {
+                        if let Ok(output) = String::from_utf8(attachment.content.clone()) {
+                            let node_id = nodePrincipal.to_string();
+                            match libllm::save_infer_result(txid_str.clone(), &user_input, &output, &node_id) {
+                                Ok(_) => {
+                                    info!("Saved inference result from attachment for tx: {}", txid_str);
+                                    true
+                                }
+                                Err(e) => {
+                                    warn!("Failed to save inference result from attachment: {}", e);
+                                    false
+                                }
+                            }
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+
+                    // If no result was saved from attachment, fallback to creating a pending task
+                    if !result_saved {
+                        let context_str = context.to_string();
+                        let chat_completion_message = serde_json::from_str(context_str.as_str()).unwrap_or(vec![]);
+                        let context_messages = if chat_completion_message.is_empty() {
+                            None
+                        } else {
+                            Some(chat_completion_message)
+                        };
+                        let submit_infer_res = libllm::infer_chain(txid_str.clone(), user_input.as_str(), context_messages);
+                        match submit_infer_res {
+                            Ok(infer_res) => {
+                                debug!("Submitted pending infer task: {:?}", infer_res);
+                            }
+                            Err(e) => {
+                                let err_msg = format!("tx:{:?} infer task submission failed: {:?}", txid_str, e.to_string());
+                                error!("{}", err_msg);
+                                return Err(FunaiHttpResponse::new_error(
+                                    &preamble,
+                                    &HttpBadRequest::new(err_msg),
+                                ));
+                            }
                         }
                     }
                 }

@@ -86,19 +86,19 @@ pub async fn infer(user_input: &str, context_messages: Option<Vec<ChatCompletion
     // Generate signature headers if private key is available
     let mut request = reqwest::Client::new()
         .post("http://127.0.0.1:8000/generate");
-    
+
     if let Some((pubkey_hex, sig_der_hex, timestamp)) = generate_signature_headers("/generate", &body_json) {
         request = request
             .header("X-Address", pubkey_hex)
             .header("X-Signature", sig_der_hex)
             .header("X-Timestamp", timestamp);
     }
-    
+
     let response = request
         .json(&request_body)
         .send()
         .await?;
-    
+
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_else(|e| format!("Failed to read body: {}", e));
@@ -144,18 +144,18 @@ pub async fn infer_check(user_input: &str, output: &str, context_messages: Optio
     );
     let request_body = GenerateRequest { prompt };
     let body_json = serde_json::to_string(&request_body).unwrap_or_default();
-    
+
     // Generate signature headers if private key is available
     let mut request = reqwest::Client::new()
         .post("http://127.0.0.1:8000/generate");
-    
+
     if let Some((pubkey_hex, sig_der_hex, timestamp)) = generate_signature_headers("/generate", &body_json) {
         request = request
             .header("X-Address", pubkey_hex)
             .header("X-Signature", sig_der_hex)
             .header("X-Timestamp", timestamp);
     }
-    
+
     let response = request
         .json(&request_body)
         .send()
@@ -187,7 +187,7 @@ pub async fn random_question() -> Result<String, Box<dyn error::Error>> {
         prompt: "简单直接给我随机出一个问题，文本长度在10-100之间。不需要解释和说明。".to_string(),
     };
     let body_json = serde_json::to_string(&request_body).unwrap_or_default();
-    
+
     // Generate signature headers if private key is available
     let mut request = reqwest::Client::new()
         .post("http://127.0.0.1:8000/generate");
@@ -258,6 +258,15 @@ pub fn infer_chain(txid: String, user_input: &str, context_messages: Option<Vec<
     let llm_db = db::open(db::get_db_path().as_str())?;
     let _ = db::sqlite_create(&llm_db, &txid.as_str(), &"", user_input, InferStatus::Created as u8)?;
     Ok(InferStatus::Created)
+}
+
+pub fn save_infer_result(txid: String, user_input: &str, output: &str, node_id: &str) -> Result<(), Box<dyn error::Error>> {
+    info!("save_infer_result txid: {} node: {}", txid, node_id);
+    let llm_db = db::open(db::get_db_path().as_str())?;
+    db::sqlite_create(&llm_db, &txid, "", user_input, InferStatus::Success as u8)?;
+    let output_hash = hex::encode(Sha256Sum::from_data(output.as_bytes()));
+    db::sqlite_end_llm(&llm_db, &txid, output, &output_hash, InferStatus::Success as u8, node_id)?;
+    Ok(())
 }
 
 
