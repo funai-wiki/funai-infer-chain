@@ -3623,7 +3623,8 @@ impl FunaiChainState {
     pub fn get_coinbase_reward(burn_block_height: u64, first_burn_block_height: u64) -> u128 {
         /*
         Coinbase reward adjustment:
-        - Initial reward: 35 STX
+        - Total Supply: 178,500,000,000 STX
+        - Initial reward: 424,224 STX
         - Halves every 4 years (approximately 52596 blocks per year)
         - Rewards calculated in micro-STX (1 STX = 1_000_000 micro-STX)
         */
@@ -3631,7 +3632,7 @@ impl FunaiChainState {
         let effective_ht = burn_block_height.saturating_sub(first_burn_block_height);
         let blocks_per_year = 52596;
         let halving_period_blocks = blocks_per_year * 4;
-        let initial_reward = 35;
+        let initial_reward: u128 = 424_224;
 
         // Calculate the halving period
         let halving_period = effective_ht / halving_period_blocks;
