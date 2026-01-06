@@ -101,3 +101,4 @@ testnet/funai-node/conf/fai-testnet-infer-conf.toml.not_commit
 llm.sqlite
 
 funai-sdk
+bitcoin/
