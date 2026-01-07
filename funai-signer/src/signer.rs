@@ -204,24 +204,26 @@ impl std::fmt::Display for Signer {
 }
 
 impl Signer {
-    /// Return the current coordinator. If in the active reward cycle, this is the miner,
-    ///  so the first element of the tuple will be None (because the miner does not have a signer index).
-    fn get_coordinator(&self, current_reward_cycle: u64) -> (Option<u32>, PublicKey) {
+    /// Return the signing coordinator. In the active reward cycle, this is the miner.
+    fn get_signing_coordinator(&self, current_reward_cycle: u64) -> (Option<u32>, PublicKey) {
         if self.reward_cycle == current_reward_cycle {
-            let Some(ref cur_miner) = self.miner_key else {
-                error!(
-                    "Signer #{}: Could not lookup current miner while in active reward cycle",
-                    self.signer_id
-                );
-                let selected = self.coordinator_selector.get_coordinator();
-                return (Some(selected.0), selected.1);
-            };
-            // coordinator is the current miner.
-            (None, cur_miner.clone())
-        } else {
-            let selected = self.coordinator_selector.get_coordinator();
-            return (Some(selected.0), selected.1);
+            if let Some(ref cur_miner) = self.miner_key {
+                return (None, cur_miner.clone());
+            }
+            // If we don't have a miner key yet, we're likely in the early phase of the cycle.
+            // Log a debug message instead of an error, as this is expected during DKG/initialization.
+            debug!(
+                "Signer #{}: Miner key not yet known in cycle {}. Falling back to signer-based coordinator.",
+                self.signer_id, self.reward_cycle
+            );
         }
+        let selected = self.coordinator_selector.get_coordinator();
+        (Some(selected.0), selected.1)
+    }
+
+    /// Return the DKG coordinator. This is always a signer.
+    fn get_dkg_coordinator(&self) -> (u32, PublicKey) {
+        self.coordinator_selector.get_coordinator()
     }
 }
 
@@ -488,7 +490,11 @@ impl Signer {
         funai_client: &FunaiClient,
         current_reward_cycle: u64,
     ) {
-        let coordinator_id = self.get_coordinator(current_reward_cycle).0;
+        let command = self.commands.front();
+        let coordinator_id = match command {
+            Some(Command::Dkg) => Some(self.get_dkg_coordinator().0),
+            _ => self.get_signing_coordinator(current_reward_cycle).0,
+        };
         match &self.state {
             State::Idle => {
                 if coordinator_id != Some(self.signer_id) {
@@ -518,7 +524,7 @@ impl Signer {
         res: Sender<Vec<OperationResult>>,
         current_reward_cycle: u64,
     ) {
-        let coordinator_id = self.get_coordinator(current_reward_cycle).0;
+        let coordinator_id = self.get_signing_coordinator(current_reward_cycle).0;
         let mut block_info = match block_validate_response {
             BlockValidateResponse::Ok(block_validate_ok) => {
                 let signer_signature_hash = block_validate_ok.signer_signature_hash;
@@ -680,9 +686,9 @@ impl Signer {
         funai_client: &FunaiClient,
         res: Sender<Vec<OperationResult>>,
         messages: &[SignerMessage],
+        coordinator_pubkey: &PublicKey,
         current_reward_cycle: u64,
     ) {
-        let coordinator_pubkey = self.get_coordinator(current_reward_cycle).1;
         let packets: Vec<Packet> = messages
             .iter()
             .filter_map(|msg| match msg {
@@ -691,7 +697,7 @@ impl Signer {
                 | SignerMessage::Transactions(_) => None,
                 // TODO: if a signer tries to trigger DKG and we already have one set in the contract, ignore the request.
                 SignerMessage::Packet(packet) => {
-                    self.verify_packet(funai_client, packet.clone(), &coordinator_pubkey)
+                    self.verify_packet(funai_client, packet.clone(), coordinator_pubkey)
                 }
             })
             .collect();
@@ -1574,7 +1580,7 @@ impl Signer {
             return Ok(());
         };
         if self.state != State::Idle
-            || Some(self.signer_id) != self.get_coordinator(current_reward_cycle).0
+            || self.signer_id != self.get_dkg_coordinator().0
         {
             // We are not the coordinator or we are in the middle of an operation. Do not attempt to queue DKG
             return Ok(());
@@ -1677,7 +1683,14 @@ impl Signer {
                     "{self}: Received {} messages from the other signers...",
                     messages.len()
                 );
-                self.handle_signer_messages(funai_client, res, messages, current_reward_cycle);
+                let coordinator_pubkey = self.get_dkg_coordinator().1;
+                self.handle_signer_messages(
+                    funai_client,
+                    res,
+                    messages,
+                    &coordinator_pubkey,
+                    current_reward_cycle,
+                );
             }
             Some(SignerEvent::MinerMessages(miner_endpoint, blocks, messages, miner_key)) => {
                 if let Some(miner_key) = miner_key {
@@ -1696,7 +1709,14 @@ impl Signer {
                     messages.len();
                     "miner_key" => ?miner_key,
                 );
-                self.handle_signer_messages(funai_client, res, messages, current_reward_cycle);
+                let coordinator_pubkey = self.get_signing_coordinator(current_reward_cycle).1;
+                self.handle_signer_messages(
+                    funai_client,
+                    res,
+                    messages,
+                    &coordinator_pubkey,
+                    current_reward_cycle,
+                );
                 self.handle_proposed_blocks(miner_endpoint, funai_client, blocks);
             }
             Some(SignerEvent::StatusCheck) => {
