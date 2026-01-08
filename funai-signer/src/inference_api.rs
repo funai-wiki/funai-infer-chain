@@ -30,10 +30,14 @@ use crate::inference_service::{
     InferenceServiceState,
 };
 use serde_json::json;
-use funailib::chainstate::funai::FunaiTransaction;
+use funailib::chainstate::funai::{
+    FunaiTransaction, TransactionPayload, TransactionVersion, FunaiPublicKey,
+};
+use funai_common::types::chainstate::FunaiAddress;
 use funai_common::util::hash::hex_bytes;
 use funai_common::codec::FunaiMessageCodec;
 use std::io::Cursor;
+use clarity::vm::types::{PrincipalData, FunaiAddressExtensions};
 
 /// Generic API response wrapper
 #[derive(Serialize, Deserialize)]
@@ -486,21 +490,21 @@ impl InferenceApiServer {
         };
 
         // Get tasks that this node can process
-        let task = {
+        let (task, node_pk_opt) = {
             let service = self.shared_state.lock().unwrap();
             
             // 1. Get supported models for the node
-            let supported_models = {
+            let (supported_models, node_pk) = {
                 let nodes = service.inference_nodes.lock().unwrap();
                 if let Some(node) = nodes.get(&node_id) {
-                    node.supported_models.clone()
+                    (node.supported_models.clone(), Some(node.public_key.clone()))
                 } else {
-                    Vec::new()
+                    (Vec::new(), None)
                 }
             };
 
             if supported_models.is_empty() {
-                None
+                (None, node_pk)
             } else {
                 // 2. Find a suitable pending task
                 let mut found_task_id = None;
@@ -531,18 +535,98 @@ impl InferenceApiServer {
                             }
                         }
                         
-                        Some(task)
+                        (Some(task), node_pk)
                     } else {
-                        None
+                        (None, node_pk)
                     }
                 } else {
-                    None
+                    (None, node_pk)
                 }
             }
         };
 
         match task {
             Some(task) => {
+                // If the task has a signed_tx, we need to inject the node_id into the payload
+                // This is allowed because the txid calculation for Infer transactions masks the node_principal
+                // so the signature remains valid even after we modify the node_principal
+                let signed_tx = if let Some(signed_tx_hex) = task.signed_tx {
+                    match hex_bytes(&signed_tx_hex) {
+                        Ok(tx_bytes) => {
+                            let mut cursor = Cursor::new(&tx_bytes);
+                            match FunaiTransaction::consensus_deserialize(&mut cursor) {
+                                Ok(mut tx) => {
+                                    if let TransactionPayload::Infer(from, amount, input, context, _, model) = tx.payload {
+                                        // Try to get principal from node_id or fallback to deriving from public key
+                                        let node_principal = match PrincipalData::parse(&node_id) {
+                                            Ok(p) => p,
+                                            Err(_) => {
+                                                // Fallback: use the node's public key from registry
+                                                if let Some(pk_hex) = node_pk_opt {
+                                                    match FunaiPublicKey::from_hex(&pk_hex) {
+                                                        Ok(pk) => {
+                                                            let is_mainnet = tx.version == TransactionVersion::Mainnet;
+                                                            let addr = FunaiAddress::p2pkh(
+                                                                is_mainnet,
+                                                                &pk,
+                                                            );
+                                                            addr.to_account_principal()
+                                                        }
+                                                        Err(e) => {
+                                                            error!("Invalid public key in registry for node {}: {}", node_id, e);
+                                                            return self.json_response(
+                                                                ApiResponse::<String>::error(format!("Invalid public key for node")),
+                                                                StatusCode::INTERNAL_SERVER_ERROR,
+                                                            );
+                                                        }
+                                                    }
+                                                } else {
+                                                    error!("Node {} not found in registry and ID is not a valid principal", node_id);
+                                                    return self.json_response(
+                                                        ApiResponse::<String>::error(format!("Node {} not registered", node_id)),
+                                                        StatusCode::NOT_FOUND,
+                                                    );
+                                                }
+                                            }
+                                        };
+                                        
+                                        // Modify payload with actual node principal
+                                        tx.payload = TransactionPayload::Infer(
+                                            from,
+                                            amount,
+                                            input,
+                                            context,
+                                            node_principal,
+                                            model,
+                                        );
+                                        
+                                        // Re-serialize
+                                        let mut new_bytes: Vec<u8> = Vec::new();
+                                        if let Err(e) = tx.consensus_serialize(&mut new_bytes) {
+                                            error!("Failed to re-serialize transaction: {}", e);
+                                            Some(signed_tx_hex)
+                                        } else {
+                                            Some(hex::encode(new_bytes))
+                                        }
+                                    } else {
+                                        Some(signed_tx_hex)
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("Failed to deserialize transaction for node injection: {}", e);
+                                    Some(signed_tx_hex)
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!("Invalid hex in stored transaction: {}", e);
+                            Some(signed_tx_hex)
+                        }
+                    }
+                } else {
+                    None
+                };
+
                 let response = GetTaskResponse {
                     task_id: task.task_id,
                     user_input: task.user_input,
@@ -550,7 +634,7 @@ impl InferenceApiServer {
                     model_name: format!("{:?}", task.model_type),
                     max_infer_time: task.max_infer_time,
                     infer_fee: task.infer_fee,
-                    signed_tx: task.signed_tx,
+                    signed_tx: signed_tx,
                 };
                 
                 info!("Assigned task {} to node {}", response.task_id, node_id);
