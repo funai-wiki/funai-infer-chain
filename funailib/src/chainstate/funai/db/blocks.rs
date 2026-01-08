@@ -5728,9 +5728,10 @@ impl FunaiChainState {
             let mut total_infer_fee = 0u64;
 
             for tx in block.txs.iter() {
-                if let TransactionPayload::Infer(_from, amount, _user_input, _context, ref node_principal, _model_name) = &tx.payload {
-                    infer_txs_fees.push((*amount, node_principal.clone()));
-                    total_infer_fee += *amount;
+                if let TransactionPayload::Infer(_from, amount, _user_input, _context, ref node_principal, _model_name, _) = &tx.payload {
+                    let total_infer_amount = *amount;
+                    infer_txs_fees.push((total_infer_amount, node_principal.clone()));
+                    total_infer_fee += total_infer_amount;
                 }
             }
             
@@ -5864,6 +5865,9 @@ impl FunaiChainState {
             node_schedule.coinbase = node_reward;
             // Fee is already handled by the miner reward, so we set fees to 0 for nodes
             node_schedule.tx_fees = MinerPaymentTxFees::Epoch2 { anchored: 0, streamed: 0 };
+            // Set burn to 0 for inference nodes so they don't scale the miner's reward in calculate_miner_reward
+            node_schedule.burnchain_commit_burn = 0;
+            node_schedule.burnchain_sortition_burn = 0;
             
             if let Err(e) = FunaiChainState::insert_inference_payment_schedule(
                 &mut chainstate_tx.tx,
@@ -6803,7 +6807,7 @@ impl FunaiChainState {
 
         // 6: payload-specific checks
         match &tx.payload {
-            TransactionPayload::Infer(_from, _amount, _user_input, _context, _node_principal, _model_name) => {
+            TransactionPayload::Infer(_from, _amount, _user_input, _context, _node_principal, _model_name, _) => {
                 // TODO do some infer check
             }
             TransactionPayload::RegisterModel(_model_name, _model_params) => {

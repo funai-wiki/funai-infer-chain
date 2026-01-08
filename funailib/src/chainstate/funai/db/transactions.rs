@@ -1456,7 +1456,7 @@ impl FunaiChainState {
                 let receipt = FunaiTransactionReceipt::from_tenure_change(tx.clone());
                 Ok(receipt)
             }
-            TransactionPayload::Infer(ref from, ref amount, _, _, ref node_principal, _) => {
+            TransactionPayload::Infer(ref from, ref amount, _, _, ref node_principal, _, _) => {
                 if tx.post_conditions.len() > 0 {
                     let msg = format!("Invalid Funai transaction: Infer transactions do not support post-conditions");
                     warn!("{}", &msg);
@@ -1618,7 +1618,7 @@ impl FunaiChainState {
         let mut transaction = clarity_block.connection().start_transaction_processing();
 
         let mut fee = tx.get_tx_fee();
-        if let TransactionPayload::Infer(_, ref amount, _, _, _, _) = tx.payload {
+        if let TransactionPayload::Infer(_, ref amount, _, _, _, _, _) = tx.payload {
             // 10% of the amount goes to the miner as an extra fee
             let miner_amount = (*amount as u64 * 10) / 100;
             fee = fee.checked_add(miner_amount).expect("Fee overflow");

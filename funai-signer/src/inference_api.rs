@@ -556,7 +556,7 @@ impl InferenceApiServer {
                             let mut cursor = Cursor::new(&tx_bytes);
                             match FunaiTransaction::consensus_deserialize(&mut cursor) {
                                 Ok(mut tx) => {
-                                    if let TransactionPayload::Infer(from, amount, input, context, _, model) = tx.payload {
+                                    if let TransactionPayload::Infer(from, amount, input, context, _, model, output_hash) = tx.payload {
                                         // Try to get principal from node_id or fallback to deriving from public key
                                         let node_principal = match PrincipalData::parse(&node_id) {
                                             Ok(p) => p,
@@ -598,6 +598,7 @@ impl InferenceApiServer {
                                             context,
                                             node_principal,
                                             model,
+                                            output_hash,
                                         );
                                         
                                         // Re-serialize

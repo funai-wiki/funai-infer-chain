@@ -628,7 +628,7 @@ impl FunaiChainState {
         parent_block_id: &FunaiBlockId,
         child_block_id: &FunaiBlockId,
     ) -> Result<Vec<MinerReward>, Error> {
-        let sql = "SELECT * FROM matured_rewards WHERE parent_index_block_hash = ?1 AND child_index_block_hash = ?2 AND vtxindex = 0";
+        let sql = "SELECT * FROM matured_rewards WHERE parent_index_block_hash = ?1 AND child_index_block_hash = ?2";
         let args: &[&dyn ToSql] = &[parent_block_id, child_block_id];
         let ret: Vec<MinerReward> = query_rows(conn, sql, args).map_err(|e| Error::DBError(e))?;
         Ok(ret)
@@ -642,11 +642,15 @@ impl FunaiChainState {
         child_block_id: &FunaiBlockId,
     ) -> Result<Option<MinerReward>, Error> {
         let config = FunaiChainState::load_db_config(conn)?;
-        let ret = FunaiChainState::inner_get_matured_miner_payments(
+        let mut ret = FunaiChainState::inner_get_matured_miner_payments(
             conn,
             parent_block_id,
             child_block_id,
         )?;
+        
+        // Filter to only include the actual miner reward (vtxindex 0) for this legacy function
+        ret.retain(|r| r.vtxindex == 0);
+
         if ret.len() == 2 {
             let reward = if ret[0].is_child() {
                 ret[0]
@@ -837,11 +841,24 @@ impl FunaiChainState {
 
         // each participant gets a share of the coinbase proportional to the fraction it burned out
         // of all participants' burns.
-        let coinbase_reward = participant
-            .coinbase
-            .checked_mul(this_burn_total as u128)
-            .expect("FATAL: STX coinbase reward overflow")
-            / (burn_total as u128);
+        let coinbase_reward = if !participant.miner && participant.burnchain_commit_burn == 0 && participant.coinbase > 0 {
+            // This is an L2 inference reward, it was already split in blocks.rs
+            participant.coinbase
+        } else if burn_total > 0 {
+            participant
+                .coinbase
+                .checked_mul(this_burn_total as u128)
+                .expect("FATAL: STX coinbase reward overflow")
+                / (burn_total as u128)
+        } else {
+            // No burn total, return 0 or participant.coinbase?
+            // If burn_total is 0 and it's a miner, we should probably give them the coinbase.
+            if participant.miner {
+                participant.coinbase
+            } else {
+                0
+            }
+        };
 
         // process poison -- someone can steal a fraction of the total coinbase if they can present
         // evidence that the miner forked the microblock stream.  The remainder of the coinbase is

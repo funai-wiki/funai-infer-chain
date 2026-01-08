@@ -283,7 +283,7 @@ impl FunaiMessageCodec for TransactionPayload {
                 write_next(fd, &(TransactionPayloadID::TenureChange as u8))?;
                 tc.consensus_serialize(fd)?;
             }
-            TransactionPayload::Infer(address, amount, userInput, context, node_principal, model_name) => {
+            TransactionPayload::Infer(address, amount, userInput, context, node_principal, model_name, output_hash) => {
                 write_next(fd, &(TransactionPayloadID::Infer as u8))?;
                 write_next(fd, address)?;
                 write_next(fd, amount)?;
@@ -291,6 +291,7 @@ impl FunaiMessageCodec for TransactionPayload {
                 write_next(fd, context)?;
                 write_next(fd, node_principal)?;
                 write_next(fd, model_name)?;
+                write_next(fd, output_hash)?;
             }
             TransactionPayload::RegisterModel(model_name, model_params) => {
                 write_next(fd, &(TransactionPayloadID::RegisterModel as u8))?;
@@ -396,7 +397,8 @@ impl FunaiMessageCodec for TransactionPayload {
                 let context: InferLPString = read_next(fd)?;
                 let node_principal: PrincipalData = read_next(fd)?;
                 let model_name: InferLPString = read_next(fd)?;
-                TransactionPayload::Infer(principal, amount, user_input, context, node_principal, model_name)
+                let output_hash: InferLPString = read_next(fd)?;
+                TransactionPayload::Infer(principal, amount, user_input, context, node_principal, model_name, output_hash)
             }
             TransactionPayloadID::RegisterModel => {
                 let model_name: InferLPString = read_next(fd)?;
@@ -851,7 +853,7 @@ impl FunaiTransaction {
     /// a txid of a funai transaction is its sha512/256 hash
     pub fn txid(&self) -> Txid {
         let mut tx = self.clone();
-        if let TransactionPayload::Infer(from, amount, input, context, _, model) = tx.payload {
+        if let TransactionPayload::Infer(from, amount, input, context, _, model, _) = tx.payload {
             tx.payload = TransactionPayload::Infer(
                 from,
                 amount,
@@ -859,6 +861,7 @@ impl FunaiTransaction {
                 context,
                 super::get_null_principal(),
                 model,
+                InferLPString::from_str("").unwrap(),
             );
         }
         let mut bytes = vec![];
@@ -1739,8 +1742,8 @@ mod test {
                 };
                 TransactionPayload::TenureChange(corrupt_tc)
             }
-            TransactionPayload::Infer(ref addr, ref amount, ref user_input, ref context, ref node, ref model) => {
-                TransactionPayload::Infer(addr.clone(), *amount, user_input.clone(), context.clone(), node.clone(), model.clone())
+            TransactionPayload::Infer(ref addr, ref amount, ref user_input, ref context, ref node, ref model, ref output_hash) => {
+                TransactionPayload::Infer(addr.clone(), *amount, user_input.clone(), context.clone(), node.clone(), model.clone(), output_hash.clone())
             }
             TransactionPayload::RegisterModel(ref name, ref params) => {
                 TransactionPayload::RegisterModel(name.clone(), params.clone())

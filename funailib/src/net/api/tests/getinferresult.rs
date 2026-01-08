@@ -62,7 +62,7 @@ fn test_try_make_response() {
     let response = responses.remove(0);
     let resp = response.decode_rpc_get_infer_result().unwrap();
 
-    assert_eq!(resp.tx_id, "123456".to_string());
+    assert_eq!(resp.txid, "123456".to_string());
 
     assert_eq!(resp.status, libllm::InferStatus::NotFound);
 }

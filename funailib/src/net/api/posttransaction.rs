@@ -247,7 +247,7 @@ impl RPCRequestHandler for RPCPostTransactionRequestHandler {
             };
 
             match tx.payload {
-                TransactionPayload::Infer(_, _, ref userInput, ref context, ref nodePrincipal, _) => {
+                TransactionPayload::Infer(_, _, ref userInput, ref context, ref nodePrincipal, _, _) => {
                     let txid_str = txid.to_hex();
                     let user_input = userInput.to_string();
 

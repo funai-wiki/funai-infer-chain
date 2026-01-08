@@ -1843,7 +1843,7 @@ impl MemPoolDB {
                         .txs_to_consider
                         .contains(&MemPoolWalkTxTypes::RegisterModel),
                 ),
-                TransactionPayload::Infer(_, _, ref userInput, ref context, _, _) => {
+                TransactionPayload::Infer(_, _, ref userInput, ref context, _, _, _) => {
                     let settings_do_consider = settings
                         .txs_to_consider
                         .contains(&MemPoolWalkTxTypes::Infer);

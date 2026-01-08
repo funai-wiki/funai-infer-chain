@@ -239,15 +239,66 @@ async fn submit_result_to_signer(client: &reqwest::Client, config: &Config, task
     Ok(())
 }
 
+use funailib::chainstate::funai::{FunaiTransaction, TransactionPayload};
+use funai_common::codec::FunaiMessageCodec;
+use std::io::Cursor;
+use funailib::util_lib::strings::InferLPString;
+
 async fn submit_tx_to_miner(client: &reqwest::Client, config: &Config, task: &TaskResponse, output: String) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if let Some(signed_tx_hex) = &task.signed_tx {
+        let mut final_tx_hex = signed_tx_hex.clone();
+        
+        // 1. Calculate output hash
+        let output_hash = libllm::get_output_hash(&output);
+        
+        // 2. Decode the signed transaction and inject the output hash
+        // This is allowed because the txid calculation for Infer transactions masks the output_hash
+        match hex::decode(signed_tx_hex) {
+            Ok(tx_bytes) => {
+                let mut cursor = Cursor::new(&tx_bytes);
+                match FunaiTransaction::consensus_deserialize(&mut cursor) {
+                    Ok(mut tx) => {
+                        if let TransactionPayload::Infer(from, amount, input, context, node, model, _) = tx.payload {
+                            info!("Injecting output hash into transaction: {}", output_hash);
+                            tx.payload = TransactionPayload::Infer(
+                                from,
+                                amount,
+                                input,
+                                context,
+                                node,
+                                model,
+                                InferLPString::from_str(output_hash.as_str()).unwrap(),
+                            );
+                            
+                            // Re-serialize the modified transaction
+                            let mut new_bytes = Vec::new();
+                            match tx.consensus_serialize(&mut new_bytes) {
+                                Ok(_) => {
+                                    final_tx_hex = hex::encode(new_bytes);
+                                }
+                                Err(e) => {
+                                    warn!("Failed to re-serialize transaction with output hash: {}. Using original tx.", e);
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to deserialize transaction for output hash injection: {}. Using original tx.", e);
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("Failed to decode transaction hex for output hash injection: {}. Using original tx.", e);
+            }
+        }
+
         info!("Submitting infer transaction to Miner with result attachment...");
         let url = format!("{}/v2/transactions", config.miner_endpoint);
         
         // Wrap both the transaction and the inference result into a JSON body.
         // Miner's /v2/transactions endpoint parses this into (tx, attachment).
         let body = serde_json::json!({
-            "tx": signed_tx_hex,
+            "tx": final_tx_hex,
             "attachment": hex::encode(output.as_bytes())
         });
 

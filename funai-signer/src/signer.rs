@@ -951,7 +951,7 @@ impl Signer {
             Ok(Some(miner_endpoint)) => {
                 for tx in block.txs.iter() {
                     match &tx.payload {
-                        TransactionPayload::Infer(_from, _amount, input, context, _node_principal, _model_name) => {
+                        TransactionPayload::Infer(_from, _amount, input, context, _node_principal, _model_name, _) => {
                             let txid = tx.txid().to_string();
                             let infer_res = funai_client
                                 .get_infer_res_with_retry(txid.clone(), miner_endpoint.clone());
@@ -960,7 +960,7 @@ impl Signer {
                                     info!("Infer res for tx {txid}: {infer_res:?}");
                                     
                                     // Verify node_principal matches the worker assigned by the Signer
-                                    if let TransactionPayload::Infer(_, _, _, _, ref node_principal, _) = tx.payload {
+                                    if let TransactionPayload::Infer(_, _, _, _, ref node_principal, _, _) = tx.payload {
                                         let node_addr = node_principal.to_string();
                                         if node_addr != infer_res.inference_node_id {
                                             warn!("Node principal mismatch for tx {txid}: expected {}, found {}", infer_res.inference_node_id, node_addr);
