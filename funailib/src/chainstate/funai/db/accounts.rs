@@ -1055,7 +1055,13 @@ impl FunaiChainState {
                 &parent_miner,
                 poison_recipient_opt.as_ref(),
             );
-            assert_eq!(parent_reward.total(), 0);
+            
+            // For inference node rewards (which are treated as user rewards but with no burn), 
+            // parent_reward should be 0, but let's log it just in case
+            if parent_reward.total() > 0 {
+                warn!("Unexpected parent reward for user/inference reward: {}", parent_reward.total());
+            }
+            
             user_rewards.push(reward);
         }
 

@@ -275,6 +275,7 @@ async fn submit_tx_to_miner(client: &reqwest::Client, config: &Config, task: &Ta
                             match tx.consensus_serialize(&mut new_bytes) {
                                 Ok(_) => {
                                     final_tx_hex = hex::encode(new_bytes);
+                                    info!("Successfully injected output hash. New tx hex length: {}", final_tx_hex.len());
                                 }
                                 Err(e) => {
                                     warn!("Failed to re-serialize transaction with output hash: {}. Using original tx.", e);

@@ -1503,20 +1503,9 @@ impl FunaiChainState {
                         }
                     }
                 } else {
-                    // Fallback to local DB query (primarily for miners during block assembly)
-                    let infer_res = libllm::query_hash(tx.txid().to_hex());
-                    if let Ok(res) = infer_res {
-                        if res.status == libllm::InferStatus::Success {
-                            match hex::decode(res.output_hash) {
-                                Ok(bytes) => (libllm::InferStatus::Success, bytes),
-                                Err(_) => (libllm::InferStatus::Failure, vec![]),
-                            }
-                        } else {
-                            (res.status, vec![])
-                        }
-                    } else {
-                        (libllm::InferStatus::Failure, vec![])
-                    }
+                    // No hash in payload. For deterministic consensus, we treat this as no inference performed.
+                    // The miner must ensure the Infer Node has injected the hash into the payload.
+                    (libllm::InferStatus::Failure, vec![])
                 };
 
                 if status == libllm::InferStatus::Success {
@@ -1639,10 +1628,16 @@ impl FunaiChainState {
 
         let mut fee = tx.get_tx_fee();
         if let TransactionPayload::Infer(_, ref amount, _, _, _, _, ref output_hash) = tx.payload {
+            // ONLY charge the extra 10% miner fee if the output_hash is present in the payload.
+            // This ensures deterministic execution across all nodes.
+            info!("Processing transaction fee for Infer tx. Output hash: '{}'", output_hash);
             if !output_hash.to_string().is_empty() {
                 // 10% of the amount goes to the miner as an extra fee
                 let miner_amount = (*amount as u64 * 10) / 100;
+                info!("Adding miner fee for Infer tx: {}", miner_amount);
                 fee = fee.checked_add(miner_amount).expect("Fee overflow");
+            } else {
+                info!("Infer tx has empty output hash, no extra miner fee charged");
             }
         }
 

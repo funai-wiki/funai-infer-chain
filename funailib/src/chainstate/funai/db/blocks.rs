@@ -5729,15 +5729,19 @@ impl FunaiChainState {
 
             for tx in block.txs.iter() {
                 if let TransactionPayload::Infer(_from, amount, _user_input, _context, ref node_principal, _model_name, ref output_hash) = &tx.payload {
+                    info!("Processing Infer tx: amount={}, node={}, output_hash={}", amount, node_principal, output_hash);
                     if !output_hash.to_string().is_empty() {
                         let total_infer_amount = *amount;
                         infer_txs_fees.push((total_infer_amount, node_principal.clone()));
                         total_infer_fee += total_infer_amount;
+                    } else {
+                        warn!("Infer tx has empty output_hash, skipping fee distribution");
                     }
                 }
             }
             
             let has_infer_txs = !infer_txs_fees.is_empty();
+            info!("Block has infer txs: {}, total_infer_fee: {}", has_infer_txs, total_infer_fee);
 
             // good to go!
             let clarity_commit =
