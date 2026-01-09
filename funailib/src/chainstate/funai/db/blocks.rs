@@ -5728,10 +5728,12 @@ impl FunaiChainState {
             let mut total_infer_fee = 0u64;
 
             for tx in block.txs.iter() {
-                if let TransactionPayload::Infer(_from, amount, _user_input, _context, ref node_principal, _model_name, _) = &tx.payload {
-                    let total_infer_amount = *amount;
-                    infer_txs_fees.push((total_infer_amount, node_principal.clone()));
-                    total_infer_fee += total_infer_amount;
+                if let TransactionPayload::Infer(_from, amount, _user_input, _context, ref node_principal, _model_name, ref output_hash) = &tx.payload {
+                    if !output_hash.to_string().is_empty() {
+                        let total_infer_amount = *amount;
+                        infer_txs_fees.push((total_infer_amount, node_principal.clone()));
+                        total_infer_fee += total_infer_amount;
+                    }
                 }
             }
             

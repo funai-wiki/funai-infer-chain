@@ -1456,7 +1456,7 @@ impl FunaiChainState {
                 let receipt = FunaiTransactionReceipt::from_tenure_change(tx.clone());
                 Ok(receipt)
             }
-            TransactionPayload::Infer(ref from, ref amount, _, _, ref node_principal, _, _) => {
+            TransactionPayload::Infer(ref from, ref amount, _, _, ref node_principal, _, ref output_hash) => {
                 if tx.post_conditions.len() > 0 {
                     let msg = format!("Invalid Funai transaction: Infer transactions do not support post-conditions");
                     warn!("{}", &msg);
@@ -1491,74 +1491,94 @@ impl FunaiChainState {
                     return Err(Error::InvalidFunaiTransaction(msg, false));
                 }
 
-                let infer_res = libllm::query_hash(tx.txid().to_hex());
-
-                if let Ok(res) = infer_res {
-                    return match res.status {
-                        libllm::InferStatus::Success => {
-                            let infer_output_hash_bytes = hex::decode(res.output_hash)
-                                .map_err(|e| Error::InvalidFunaiTransaction(e.to_string(), false))?;
-                            let cost_before = clarity_tx.cost_so_far();
-                            
-                            // Calculate amount distribution: 10% to miner, 90% to node_principal
-                            // The 10% miner share is handled as an additional transaction fee in process_transaction()
-                            let node_amount = (*amount as u128 * 90) / 100;
-                            
-                            let mut all_events = Vec::new();
-
-                            // Transfer 90% to node_principal
-                            if node_amount > 0 {
-                            let (_, _asset_map_transfer, events_transfer) = clarity_tx
-                                .run_stx_transfer(
-                                    &origin_account.principal,
-                                        node_principal,
-                                        node_amount,
-                                    &BuffData {
-                                        data: Vec::new(),
-                                    },
-                                )
-                                .map_err(Error::ClarityError)?;
-                                all_events.extend(events_transfer);
+                let cost_before = clarity_tx.cost_so_far();
+                let output_hash_str = output_hash.to_string();
+                let (status, final_output_hash_bytes) = if !output_hash_str.is_empty() {
+                    // If the output hash is in the payload, use it. This is deterministic for all nodes.
+                    match hex::decode(&output_hash_str) {
+                        Ok(bytes) => (libllm::InferStatus::Success, bytes),
+                        Err(e) => {
+                            warn!("Failed to decode output hash hex in transaction {}: {}", tx.txid(), e);
+                            (libllm::InferStatus::Failure, vec![])
+                        }
+                    }
+                } else {
+                    // Fallback to local DB query (primarily for miners during block assembly)
+                    let infer_res = libllm::query_hash(tx.txid().to_hex());
+                    if let Ok(res) = infer_res {
+                        if res.status == libllm::InferStatus::Success {
+                            match hex::decode(res.output_hash) {
+                                Ok(bytes) => (libllm::InferStatus::Success, bytes),
+                                Err(_) => (libllm::InferStatus::Failure, vec![]),
                             }
-                            
-                            // Run the infer operation
-                            let (value, _asset_map, events) = clarity_tx.run_stx_infer(
-                                from,
+                        } else {
+                            (res.status, vec![])
+                        }
+                    } else {
+                        (libllm::InferStatus::Failure, vec![])
+                    }
+                };
+
+                if status == libllm::InferStatus::Success {
+                    // Calculate amount distribution: 10% to miner, 90% to node_principal
+                    // The 10% miner share is handled as an additional transaction fee in process_transaction()
+                    let node_amount = (*amount as u128 * 90) / 100;
+                    
+                    let mut all_events = Vec::new();
+
+                    // Transfer 90% to node_principal
+                    if node_amount > 0 {
+                        let (_, _asset_map_transfer, events_transfer) = clarity_tx
+                            .run_stx_transfer(
+                                &origin_account.principal,
+                                node_principal,
+                                node_amount,
                                 &BuffData {
-                                    data: infer_output_hash_bytes,
+                                    data: Vec::new(),
                                 },
                             )
-                                .map_err(Error::ClarityError)?;
-                            all_events.extend(events);
+                            .map_err(Error::ClarityError)?;
+                        all_events.extend(events_transfer);
+                    }
+                    
+                    // Run the infer operation
+                    let (value, _asset_map, events) = clarity_tx.run_stx_infer(
+                        from,
+                        &BuffData {
+                            data: final_output_hash_bytes,
+                        },
+                    )
+                        .map_err(Error::ClarityError)?;
+                    all_events.extend(events);
 
-                            let mut total_cost = clarity_tx.cost_so_far();
-                            total_cost
-                                .sub(&cost_before)
-                                .expect("BUG: total block cost decreased");
+                    let mut total_cost = clarity_tx.cost_so_far();
+                    total_cost
+                        .sub(&cost_before)
+                        .expect("BUG: total block cost decreased");
 
-                            let receipt = FunaiTransactionReceipt::from_infer(
-                                tx.clone(),
-                                all_events,
-                                value,
-                                total_cost,
-                            );
-                            Ok(receipt)
-                        }
-                        libllm::InferStatus::NotFound => { //  theoretically, this should not happen
-                            let msg = format!("Infer task not found,res:{:?}", res);
-                            warn!("{}", &msg);
-                            Err(Error::InferTaskNotSuccess)
-                        }
-                        libllm::InferStatus::Created | libllm::InferStatus::InProgress |  libllm::InferStatus::Failure => {
-                            let msg = format!("Infer failed,res:{:?}", res);
-                            warn!("{}", &msg);
-                            Err(Error::InferTaskNotSuccess)
-                        }
-                    };
-                } else { // failed to query infer task status
-                    let msg = format!("Infer failed,res:{:?}", infer_res.err());
+                    let receipt = FunaiTransactionReceipt::from_infer(
+                        tx.clone(),
+                        all_events,
+                        value,
+                        total_cost,
+                    );
+                    Ok(receipt)
+                } else {
+                    let msg = format!("Infer task not successful or hash missing for tx {}", tx.txid());
                     warn!("{}", &msg);
-                    Err(Error::NetError(net_error::DeserializeError(msg)))
+                    let receipt = FunaiTransactionReceipt {
+                        transaction: tx.clone().into(),
+                        events: vec![],
+                        post_condition_aborted: false,
+                        result: Value::err_none(),
+                        stx_burned: 0,
+                        contract_analysis: None,
+                        execution_cost: cost_before,
+                        microblock_header: None,
+                        tx_index: 0,
+                        vm_error: Some(format!("{}", Error::InferTaskNotSuccess)),
+                    };
+                    Ok(receipt)
                 }
             }
             TransactionPayload::RegisterModel(_, _) => {
@@ -1618,10 +1638,12 @@ impl FunaiChainState {
         let mut transaction = clarity_block.connection().start_transaction_processing();
 
         let mut fee = tx.get_tx_fee();
-        if let TransactionPayload::Infer(_, ref amount, _, _, _, _, _) = tx.payload {
-            // 10% of the amount goes to the miner as an extra fee
-            let miner_amount = (*amount as u64 * 10) / 100;
-            fee = fee.checked_add(miner_amount).expect("Fee overflow");
+        if let TransactionPayload::Infer(_, ref amount, _, _, _, _, ref output_hash) = tx.payload {
+            if !output_hash.to_string().is_empty() {
+                // 10% of the amount goes to the miner as an extra fee
+                let miner_amount = (*amount as u64 * 10) / 100;
+                fee = fee.checked_add(miner_amount).expect("Fee overflow");
+            }
         }
 
         let tx_receipt = if epoch >= FunaiEpochId::Epoch21 {
