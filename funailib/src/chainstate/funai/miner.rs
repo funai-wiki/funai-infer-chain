@@ -26,7 +26,7 @@ use clarity::vm::ast::ASTRules;
 use clarity::vm::clarity::TransactionConnection;
 use clarity::vm::database::BurnStateDB;
 use clarity::vm::errors::Error as InterpreterError;
-use clarity::vm::types::TypeSignature;
+use clarity::vm::types::{FunaiAddressExtensions as ClarityFunaiAddressExtensions, TypeSignature};
 use serde::Deserialize;
 use funai_common::codec::{read_next, write_next, FunaiMessageCodec};
 use funai_common::types::chainstate::{
@@ -44,6 +44,7 @@ use crate::chainstate::burn::operations::*;
 use crate::chainstate::burn::*;
 use crate::chainstate::funai::address::FunaiAddressExtensions;
 use crate::chainstate::funai::db::blocks::{MemPoolRejection, SetupBlockResult};
+use crate::clarity_vm::database::SortitionDBRef;
 use crate::chainstate::funai::db::transactions::{
     handle_clarity_runtime_error, ClarityRuntimeTxError,
 };
@@ -986,7 +987,7 @@ impl<'a> FunaiMicroblockBuilder<'a> {
         }
 
         let quiet = !cfg!(test);
-        match FunaiChainState::process_transaction(clarity_tx, &tx, quiet, ast_rules) {
+        match FunaiChainState::process_transaction(clarity_tx, &tx, quiet, ast_rules, None) {
             Ok((fee, receipt)) => Ok(TransactionResult::success(&tx, fee, receipt)),
             Err(e) => {
                 let (is_problematic, e) =
@@ -1592,9 +1593,12 @@ impl FunaiBlockBuilder {
         }
 
         let quiet = !cfg!(test);
+        let miner_pubk = FunaiPublicKey::from_private(&self.miner_privkey);
+        let miner_address = FunaiAddress::p2pkh(clarity_tx.config.mainnet, &miner_pubk).to_account_principal();
+        
         if !self.anchored_done {
             // save
-            match FunaiChainState::process_transaction(clarity_tx, tx, quiet, ASTRules::Typical) {
+            match FunaiChainState::process_transaction(clarity_tx, tx, quiet, ASTRules::Typical, Some(miner_address.clone())) {
                 Ok((fee, receipt)) => {
                     self.total_anchored_fees += fee;
                 }
@@ -1605,7 +1609,7 @@ impl FunaiBlockBuilder {
 
             self.txs.push(tx.clone());
         } else {
-            match FunaiChainState::process_transaction(clarity_tx, tx, quiet, ASTRules::Typical) {
+            match FunaiChainState::process_transaction(clarity_tx, tx, quiet, ASTRules::Typical, Some(miner_address)) {
                 Ok((fee, receipt)) => {
                     self.total_streamed_fees += fee;
                 }
@@ -1915,6 +1919,29 @@ impl FunaiBlockBuilder {
         burn_dbconn: &'a SortitionDBConn,
         info: &'b mut MinerEpochInfo<'a>,
     ) -> Result<(ClarityTx<'b, 'b>, ExecutionCost), Error> {
+        let parent_miner_address: Option<PrincipalData> = if self.chain_tip.funai_block_height > 0 {
+            match FunaiChainState::load_block(
+                &info.chainstate_tx.get_blocks_path(),
+                &self.chain_tip.consensus_hash,
+                &self.chain_tip.anchored_header.block_hash(),
+            ) {
+                Ok(Some(parent_block)) => {
+                    if let Some(coinbase_tx) = parent_block.get_coinbase_tx() {
+                        let miner_addr = coinbase_tx.get_origin().get_address(info.mainnet);
+                        match coinbase_tx.try_as_coinbase() {
+                            Some((_, Some(recipient), _)) => Some(recipient.clone()),
+                            _ => Some(miner_addr.to_account_principal()),
+                        }
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+
         let SetupBlockResult {
             clarity_tx,
             microblock_execution_cost,
@@ -1924,8 +1951,8 @@ impl FunaiBlockBuilder {
         } = FunaiChainState::setup_block(
             &mut info.chainstate_tx,
             info.clarity_instance,
-            burn_dbconn,
-            burn_dbconn,
+            burn_dbconn as &dyn BurnStateDB,
+            burn_dbconn as &dyn SortitionDBRef,
             burn_dbconn.conn(),
             &burn_dbconn.context.pox_constants,
             &self.chain_tip,
@@ -1935,6 +1962,7 @@ impl FunaiBlockBuilder {
             self.parent_header_hash,
             &info.parent_microblocks,
             info.mainnet,
+            parent_miner_address,
             Some(self.miner_id),
         )?;
         self.miner_payouts = matured_miner_rewards_opt;
@@ -2579,6 +2607,9 @@ impl BlockBuilder for FunaiBlockBuilder {
         };
 
         let quiet = !cfg!(test);
+        let miner_pubk = FunaiPublicKey::from_private(&self.miner_privkey);
+        let miner_address = FunaiAddress::p2pkh(clarity_tx.config.mainnet, &miner_pubk).to_account_principal();
+
         let result = if !self.anchored_done {
             // building up the anchored blocks
             if tx.anchor_mode != TransactionAnchorMode::OnChainOnly
@@ -2607,7 +2638,7 @@ impl BlockBuilder for FunaiBlockBuilder {
                 return TransactionResult::problematic(&tx, Error::NetError(e));
             }
             let (fee, receipt) = match FunaiChainState::process_transaction(
-                clarity_tx, tx, quiet, ast_rules,
+                clarity_tx, tx, quiet, ast_rules, Some(miner_address.clone()),
             ) {
                 Ok((fee, receipt)) => (fee, receipt),
                 Err(e) => {
@@ -2688,7 +2719,7 @@ impl BlockBuilder for FunaiBlockBuilder {
                 return TransactionResult::problematic(&tx, Error::NetError(e));
             }
             let (fee, receipt) = match FunaiChainState::process_transaction(
-                clarity_tx, tx, quiet, ast_rules,
+                clarity_tx, tx, quiet, ast_rules, Some(miner_address),
             ) {
                 Ok((fee, receipt)) => (fee, receipt),
                 Err(e) => {

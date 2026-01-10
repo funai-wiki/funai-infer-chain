@@ -4028,15 +4028,17 @@ impl FunaiChainState {
         clarity_tx: &mut ClarityTx,
         microblocks: &[FunaiMicroblock],
         ast_rules: ASTRules,
+        miner_address: Option<PrincipalData>,
     ) -> Result<(u128, u128, Vec<FunaiTransactionReceipt>), (Error, BlockHeaderHash)> {
         let mut fees = 0u128;
         let mut burns = 0u128;
         let mut receipts = vec![];
         for microblock in microblocks.iter() {
             debug!("Process microblock {}", &microblock.block_hash());
+            
             for (tx_index, tx) in microblock.txs.iter().enumerate() {
                 let (tx_fee, mut tx_receipt) =
-                    FunaiChainState::process_transaction(clarity_tx, tx, false, ast_rules)
+                    FunaiChainState::process_transaction(clarity_tx, tx, false, ast_rules, miner_address.clone())
                         .map_err(|e| (e, microblock.block_hash()))?;
 
                 tx_receipt.microblock_header = Some(microblock.header.clone());
@@ -4540,13 +4542,14 @@ impl FunaiChainState {
         block_txs: &[FunaiTransaction],
         mut tx_index: u32,
         ast_rules: ASTRules,
+        miner_address: Option<PrincipalData>,
     ) -> Result<(u128, u128, Vec<FunaiTransactionReceipt>), Error> {
         let mut fees = 0u128;
         let mut burns = 0u128;
         let mut receipts = vec![];
         for tx in block_txs.iter() {
             let (tx_fee, mut tx_receipt) =
-                FunaiChainState::process_transaction(clarity_tx, tx, false, ast_rules)?;
+                FunaiChainState::process_transaction(clarity_tx, tx, false, ast_rules, miner_address.clone())?;
             fees = fees.checked_add(u128::from(tx_fee)).expect("Fee overflow");
             tx_receipt.tx_index = tx_index;
             burns = burns
@@ -5032,6 +5035,7 @@ impl FunaiChainState {
         parent_header_hash: BlockHeaderHash,
         parent_microblocks: &Vec<FunaiMicroblock>,
         mainnet: bool,
+        miner_address: Option<PrincipalData>,
         miner_id_opt: Option<usize>,
     ) -> Result<SetupBlockResult<'a, 'b>, Error> {
         let parent_index_hash = FunaiBlockId::new(&parent_consensus_hash, &parent_header_hash);
@@ -5142,6 +5146,7 @@ impl FunaiChainState {
                 &mut clarity_tx,
                 &parent_microblocks,
                 microblock_ast_rules,
+                miner_address,
             ) {
                 Ok((fees, burns, events)) => (fees, burns, events),
                 Err((e, mblock_header_hash)) => {
@@ -5481,6 +5486,26 @@ impl FunaiChainState {
         .expect("BUG: Failed to load snapshot for block snapshot during Funai block processing")
         .parent_burn_header_hash;
 
+        let blocks_path = chainstate_tx.get_blocks_path().clone();
+        let parent_miner_address = if parent_chain_tip.funai_block_height > 0 {
+            match FunaiChainState::load_block(&blocks_path, &parent_consensus_hash, &parent_block_hash) {
+                Ok(Some(parent_block)) => {
+                    if let Some(coinbase_tx) = parent_block.get_coinbase_tx() {
+                        let miner_addr = coinbase_tx.get_origin().get_address(mainnet);
+                        match coinbase_tx.try_as_coinbase() {
+                            Some((_, Some(recipient), _)) => Some(recipient.clone()),
+                            _ => Some(miner_addr.to_account_principal()),
+                        }
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+
         let SetupBlockResult {
             mut clarity_tx,
             mut tx_receipts,
@@ -5511,6 +5536,7 @@ impl FunaiChainState {
             parent_block_hash,
             microblocks,
             mainnet,
+            parent_miner_address,
             None,
         )?;
 
@@ -5599,6 +5625,23 @@ impl FunaiChainState {
                    "evaluated_epoch" => %evaluated_epoch);
 
             // process anchored block
+            let miner_address = if let Some(coinbase_tx) = block.get_coinbase_tx() {
+                let miner_addr = coinbase_tx.get_origin().get_address(clarity_tx.config.mainnet);
+                let recipient = if evaluated_epoch >= FunaiEpochId::Epoch21 {
+                    match coinbase_tx.try_as_coinbase() {
+                        Some((_, recipient_opt, _)) => recipient_opt
+                            .cloned()
+                            .unwrap_or(miner_addr.to_account_principal()),
+                        None => miner_addr.to_account_principal(),
+                    }
+                } else {
+                    miner_addr.to_account_principal()
+                };
+                Some(recipient)
+            } else {
+                None
+            };
+
             let (block_fees, block_burns, txs_receipts) =
                 match FunaiChainState::process_block_transactions(
                     &mut clarity_tx,
@@ -5606,6 +5649,7 @@ impl FunaiChainState {
                     u32::try_from(microblock_txs_receipts.len())
                         .expect("more than 2^32 tx receipts"),
                     ast_rules,
+                    miner_address.clone(),
                 ) {
                     Err(e) => {
                         let msg = format!("Invalid Funai block {}: {:?}", block.block_hash(), &e);

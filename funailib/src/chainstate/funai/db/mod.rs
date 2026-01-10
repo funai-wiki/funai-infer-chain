@@ -1262,6 +1262,7 @@ impl FunaiChainState {
                         &boot_code_smart_contract,
                         &boot_code_account,
                         ASTRules::PrecheckSize,
+                        None,
                     )
                 })?;
                 receipts.push(tx_receipt);

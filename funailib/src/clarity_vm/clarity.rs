@@ -864,6 +864,7 @@ impl<'a, 'b> ClarityBlockConnection<'a, 'b> {
                     &costs_2_contract_tx,
                     &boot_code_account,
                     ASTRules::PrecheckSize,
+                    None,
                 )
                 .expect("FATAL: Failed to process PoX 2 contract initialization");
 
@@ -977,6 +978,7 @@ impl<'a, 'b> ClarityBlockConnection<'a, 'b> {
                     &pox_2_contract_tx,
                     &boot_code_account,
                     ASTRules::PrecheckSize,
+                    None,
                 )
                 .expect("FATAL: Failed to process PoX 2 contract initialization");
 
@@ -1048,6 +1050,7 @@ impl<'a, 'b> ClarityBlockConnection<'a, 'b> {
                     &costs_3_contract_tx,
                     &boot_code_account,
                     ASTRules::PrecheckSize,
+                    None,
                 )
                 .expect("FATAL: Failed to process costs-3 contract initialization");
 
@@ -1218,6 +1221,7 @@ impl<'a, 'b> ClarityBlockConnection<'a, 'b> {
                     &pox_3_contract_tx,
                     &boot_code_account,
                     ASTRules::PrecheckSize,
+                    None,
                 )
                 .expect("FATAL: Failed to process PoX 3 contract initialization");
 
@@ -1335,6 +1339,7 @@ impl<'a, 'b> ClarityBlockConnection<'a, 'b> {
                     &pox_4_contract_tx,
                     &boot_code_account,
                     ASTRules::PrecheckSize,
+                    None,
                 )
                 .expect("FATAL: Failed to process PoX 4 contract initialization");
 
@@ -1393,6 +1398,7 @@ impl<'a, 'b> ClarityBlockConnection<'a, 'b> {
                     &signers_contract_tx,
                     &boot_code_account,
                     ASTRules::PrecheckSize,
+                    None,
                 )
                 .expect("FATAL: Failed to process .signers contract initialization");
                 receipt
@@ -1439,6 +1445,7 @@ impl<'a, 'b> ClarityBlockConnection<'a, 'b> {
                             &signers_contract_tx,
                             &boot_code_account,
                             ASTRules::PrecheckSize,
+                            None,
                         )
                         .expect("FATAL: Failed to process .signers DB contract initialization");
                         receipt
@@ -1479,6 +1486,7 @@ impl<'a, 'b> ClarityBlockConnection<'a, 'b> {
                     &signers_contract_tx,
                     &boot_code_account,
                     ASTRules::PrecheckSize,
+                    None,
                 )
                 .expect("FATAL: Failed to process .signers-voting contract initialization");
                 receipt
@@ -2652,6 +2660,7 @@ mod tests {
                     &tx1,
                     &account,
                     ASTRules::PrecheckSize,
+                    None,
                 )
                 .unwrap();
                 assert_eq!(receipt.post_condition_aborted, true);
@@ -2662,6 +2671,7 @@ mod tests {
                     &tx2,
                     &account,
                     ASTRules::PrecheckSize,
+                    None,
                 )
                 .unwrap();
             });
@@ -2672,6 +2682,7 @@ mod tests {
                     &tx3,
                     &account,
                     ASTRules::PrecheckSize,
+                    None,
                 )
                 .unwrap();
 

@@ -3006,11 +3006,18 @@ impl NakamotoChainState {
         );
 
         // process anchored block
+        let miner_address = if let Some(coinbase_tx) = block.get_coinbase_tx() {
+            Some(coinbase_tx.get_origin().get_address(clarity_tx.config.mainnet).to_account_principal())
+        } else {
+            None
+        };
+
         let (block_fees, txs_receipts) = match FunaiChainState::process_block_transactions(
             &mut clarity_tx,
             &block.txs,
             0,
             ast_rules,
+            miner_address,
         ) {
             Err(e) => {
                 let msg = format!("Invalid Funai block {}: {:?}", &block_hash, &e);

@@ -304,6 +304,7 @@ impl UnconfirmedState {
                         &mut clarity_tx,
                         &[mblock.clone()],
                         ast_rules,
+                        None,
                     ) {
                         Ok(x) => x,
                         Err((e, _)) => {

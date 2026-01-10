@@ -983,6 +983,7 @@ impl FunaiChainState {
         tx: &FunaiTransaction,
         origin_account: &FunaiAccount,
         ast_rules: ASTRules,
+        miner_address: Option<PrincipalData>,
     ) -> Result<FunaiTransactionReceipt, Error> {
         match tx.payload {
             TransactionPayload::TokenTransfer(ref addr, ref amount, ref memo) => {
@@ -1510,12 +1511,14 @@ impl FunaiChainState {
 
                 if status == libllm::InferStatus::Success {
                     // Calculate amount distribution: 10% to miner, 90% to node_principal
-                    // The 10% miner share is handled as an additional transaction fee in process_transaction()
-                    let node_amount = (*amount as u128 * 90) / 100;
+                    // 10% to miner (immediate transfer)
+                    let miner_amount = (*amount as u128 * 10) / 100;
                     
                     let mut all_events = Vec::new();
 
                     // Transfer 90% to node_principal
+                    let node_amount = (*amount as u128 * 90) / 100;
+
                     if node_amount > 0 {
                         let (_, _asset_map_transfer, events_transfer) = clarity_tx
                             .run_stx_transfer(
@@ -1528,6 +1531,26 @@ impl FunaiChainState {
                             )
                             .map_err(Error::ClarityError)?;
                         all_events.extend(events_transfer);
+                    }
+
+                    // Transfer 10% to miner
+                    if miner_amount > 0 {
+                        if let Some(miner_addr) = &miner_address {
+                            info!("Transferring 10% miner share ({}) to miner {}", miner_amount, miner_addr);
+                            let (_, _asset_map_transfer, events_transfer) = clarity_tx
+                                .run_stx_transfer(
+                                    &origin_account.principal,
+                                    miner_addr,
+                                    miner_amount,
+                                    &BuffData {
+                                        data: Vec::new(),
+                                    },
+                                )
+                                .map_err(Error::ClarityError)?;
+                            all_events.extend(events_transfer);
+                        } else {
+                            warn!("No miner address provided for Infer tx miner reward transfer");
+                        }
                     }
                     
                     // Run the infer operation
@@ -1607,6 +1630,7 @@ impl FunaiChainState {
         tx: &FunaiTransaction,
         quiet: bool,
         ast_rules: ASTRules,
+        miner_address: Option<PrincipalData>,
     ) -> Result<(u64, FunaiTransactionReceipt), Error> {
         debug!("Process transaction {} ({})", tx.txid(), tx.payload.name());
         let epoch = clarity_block.get_epoch();
@@ -1626,20 +1650,9 @@ impl FunaiChainState {
 
         let mut transaction = clarity_block.connection().start_transaction_processing();
 
-        let mut fee = tx.get_tx_fee();
-        if let TransactionPayload::Infer(_, ref amount, _, _, _, _, ref output_hash) = tx.payload {
-            // ONLY charge the extra 10% miner fee if the output_hash is present in the payload.
-            // This ensures deterministic execution across all nodes.
-            info!("Processing transaction fee for Infer tx. Output hash: '{}'", output_hash);
-            if !output_hash.to_string().is_empty() {
-                // 10% of the amount goes to the miner as an extra fee
-                let miner_amount = (*amount as u64 * 10) / 100;
-                info!("Adding miner fee for Infer tx: {}", miner_amount);
-                fee = fee.checked_add(miner_amount).expect("Fee overflow");
-            } else {
-                info!("Infer tx has empty output hash, no extra miner fee charged");
-            }
-        }
+        let fee = tx.get_tx_fee();
+        // Previous logic for 10% miner fee addition removed as requested.
+        // The 10% is now handled via direct transfer in process_transaction_payload.
 
         let tx_receipt = if epoch >= FunaiEpochId::Epoch21 {
             // 2.1 and later: pay tx fee, then process transaction
@@ -1659,6 +1672,7 @@ impl FunaiChainState {
                 tx,
                 &origin_account,
                 ast_rules,
+                miner_address.clone(),
             )?;
 
             // update the account nonces
@@ -1687,6 +1701,7 @@ impl FunaiChainState {
                 tx,
                 &origin_account,
                 ast_rules,
+                miner_address.clone(),
             )?;
 
             let new_payer_account = FunaiChainState::get_payer_account(&mut transaction, tx);
@@ -1831,6 +1846,7 @@ pub mod test {
                 stx_balance: STXBalance::Unlocked { amount: 100 },
             },
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
 
@@ -1893,12 +1909,7 @@ pub mod test {
                 FunaiChainState::account_credit(tx, &addr.to_account_principal(), 223)
             });
 
-            let (fee, _) = FunaiChainState::process_transaction(
-                &mut conn,
-                &signed_tx,
-                false,
-                ASTRules::PrecheckSize,
-            )
+            let (fee, _) = FunaiChainState::process_transaction(&mut conn, &signed_tx, false, ASTRules::PrecheckSize, None)
             .unwrap();
 
             let account_after =
@@ -1948,12 +1959,7 @@ pub mod test {
             assert_eq!(recv_account.stx_balance.amount_unlocked(), 0);
             assert_eq!(recv_account.nonce, 0);
 
-            let (fee, _) = FunaiChainState::process_transaction(
-                &mut conn,
-                &signed_tx,
-                false,
-                ASTRules::PrecheckSize,
-            )
+            let (fee, _) = FunaiChainState::process_transaction(&mut conn, &signed_tx, false, ASTRules::PrecheckSize, None)
             .unwrap();
 
             let account_after =
@@ -2142,12 +2148,7 @@ pub mod test {
                 assert_eq!(account.stx_balance.amount_unlocked(), 123);
                 assert_eq!(account.nonce, 0);
 
-                let res = FunaiChainState::process_transaction(
-                    &mut conn,
-                    &signed_tx,
-                    false,
-                    ASTRules::PrecheckSize,
-                );
+                let res = FunaiChainState::process_transaction(&mut conn, &signed_tx, false, ASTRules::PrecheckSize, None);
                 assert!(res.is_err());
 
                 match res {
@@ -2242,12 +2243,7 @@ pub mod test {
                 FunaiChainState::account_credit(tx, &addr.to_account_principal(), 123)
             });
 
-            let (fee, _) = FunaiChainState::process_transaction(
-                &mut conn,
-                &signed_tx,
-                false,
-                ASTRules::PrecheckSize,
-            )
+            let (fee, _) = FunaiChainState::process_transaction(&mut conn, &signed_tx, false, ASTRules::PrecheckSize, None)
             .unwrap();
 
             let account_after =
@@ -2327,12 +2323,7 @@ pub mod test {
             let account = FunaiChainState::get_account(&mut conn, &addr.to_account_principal());
             assert_eq!(account.nonce, 0);
 
-            let (fee, _) = FunaiChainState::process_transaction(
-                &mut conn,
-                &signed_tx,
-                false,
-                ASTRules::PrecheckSize,
-            )
+            let (fee, _) = FunaiChainState::process_transaction(&mut conn, &signed_tx, false, ASTRules::PrecheckSize, None)
             .unwrap();
 
             let account = FunaiChainState::get_account(&mut conn, &addr.to_account_principal());
@@ -2421,12 +2412,7 @@ pub mod test {
                     FunaiChainState::get_account(&mut conn, &addr.to_account_principal());
                 assert_eq!(account.nonce, next_nonce);
 
-                let res = FunaiChainState::process_transaction(
-                    &mut conn,
-                    &signed_tx,
-                    false,
-                    ASTRules::PrecheckSize,
-                );
+                let res = FunaiChainState::process_transaction(&mut conn, &signed_tx, false, ASTRules::PrecheckSize, None);
                 if expected_behavior[i] {
                     assert!(res.is_ok());
 
@@ -2515,12 +2501,7 @@ pub mod test {
                     ContractName::from(contract_name),
                 );
 
-                let (fee, receipt) = FunaiChainState::process_transaction(
-                    &mut conn,
-                    &signed_tx,
-                    false,
-                    ASTRules::PrecheckSize,
-                )
+                let (fee, receipt) = FunaiChainState::process_transaction(&mut conn, &signed_tx, false, ASTRules::PrecheckSize, None)
                 .unwrap();
 
                 // Verify that the syntax error is recorded in the receipt
@@ -2619,12 +2600,7 @@ pub mod test {
                 assert_eq!(account.nonce, i as u64);
 
                 // runtime error should be handled
-                let (_fee, _) = FunaiChainState::process_transaction(
-                    &mut conn,
-                    &signed_tx,
-                    false,
-                    ASTRules::PrecheckSize,
-                )
+                let (_fee, _) = FunaiChainState::process_transaction(&mut conn, &signed_tx, false, ASTRules::PrecheckSize, None)
                 .unwrap();
 
                 // account nonce should increment
@@ -2712,12 +2688,7 @@ pub mod test {
                 FunaiChainState::get_account(&mut conn, &addr_sponsor.to_account_principal());
             assert_eq!(account.nonce, 0);
 
-            let (fee, _) = FunaiChainState::process_transaction(
-                &mut conn,
-                &signed_tx,
-                false,
-                ASTRules::PrecheckSize,
-            )
+            let (fee, _) = FunaiChainState::process_transaction(&mut conn, &signed_tx, false, ASTRules::PrecheckSize, None)
             .unwrap();
 
             let account = FunaiChainState::get_account(&mut conn, &addr.to_account_principal());
@@ -2830,24 +2801,14 @@ pub mod test {
                 FunaiChainState::get_data_var(&mut conn, &contract_id, "bar").unwrap();
             assert!(var_before_res.is_none());
 
-            let (fee, _) = FunaiChainState::process_transaction(
-                &mut conn,
-                &signed_tx,
-                false,
-                ASTRules::PrecheckSize,
-            )
+            let (fee, _) = FunaiChainState::process_transaction(&mut conn, &signed_tx, false, ASTRules::PrecheckSize, None)
             .unwrap();
 
             let var_before_set_res =
                 FunaiChainState::get_data_var(&mut conn, &contract_id, "bar").unwrap();
             assert_eq!(var_before_set_res, Some(Value::Int(0)));
 
-            let (fee_2, _) = FunaiChainState::process_transaction(
-                &mut conn,
-                &signed_tx_2,
-                false,
-                ASTRules::PrecheckSize,
-            )
+            let (fee_2, _) = FunaiChainState::process_transaction(&mut conn, &signed_tx_2, false, ASTRules::PrecheckSize, None)
             .unwrap();
 
             let account = FunaiChainState::get_account(&mut conn, &addr.to_account_principal());
@@ -2969,12 +2930,7 @@ pub mod test {
                 FunaiChainState::get_data_var(&mut conn, &contract_id, "savedContract").unwrap();
             assert!(var_before_res.is_none());
 
-            let (fee, _) = FunaiChainState::process_transaction(
-                &mut conn,
-                &signed_tx,
-                false,
-                ASTRules::PrecheckSize,
-            )
+            let (fee, _) = FunaiChainState::process_transaction(&mut conn, &signed_tx, false, ASTRules::PrecheckSize, None)
             .unwrap();
 
             let var_before_set_res =
@@ -2984,12 +2940,7 @@ pub mod test {
                 Some(Value::Principal(PrincipalData::from(addr.clone())))
             );
 
-            let (fee_2, _) = FunaiChainState::process_transaction(
-                &mut conn,
-                &signed_tx_2,
-                false,
-                ASTRules::PrecheckSize,
-            )
+            let (fee_2, _) = FunaiChainState::process_transaction(&mut conn, &signed_tx_2, false, ASTRules::PrecheckSize, None)
             .unwrap();
 
             let account = FunaiChainState::get_account(&mut conn, &addr.to_account_principal());
@@ -3064,12 +3015,7 @@ pub mod test {
                 StandardPrincipalData::from(addr.clone()),
                 ContractName::from("hello-world"),
             );
-            let (_fee, _) = FunaiChainState::process_transaction(
-                &mut conn,
-                &signed_tx,
-                false,
-                ASTRules::PrecheckSize,
-            )
+            let (_fee, _) = FunaiChainState::process_transaction(&mut conn, &signed_tx, false, ASTRules::PrecheckSize, None)
             .unwrap();
 
             // contract-calls that don't commit
@@ -3115,12 +3061,7 @@ pub mod test {
                     FunaiChainState::get_account(&mut conn, &addr_2.to_account_principal());
                 assert_eq!(account_2.nonce, next_nonce);
 
-                let (_fee, _) = FunaiChainState::process_transaction(
-                    &mut conn,
-                    &signed_tx_2,
-                    false,
-                    ASTRules::PrecheckSize,
-                )
+                let (_fee, _) = FunaiChainState::process_transaction(&mut conn, &signed_tx_2, false, ASTRules::PrecheckSize, None)
                 .unwrap();
 
                 // nonce should have incremented
@@ -3184,12 +3125,7 @@ pub mod test {
                 &ConsensusHash([(dbi + 1) as u8; 20]),
                 &BlockHeaderHash([(dbi + 1) as u8; 32]),
             );
-            let (_fee, _) = FunaiChainState::process_transaction(
-                &mut conn,
-                &signed_tx,
-                false,
-                ASTRules::PrecheckSize,
-            )
+            let (_fee, _) = FunaiChainState::process_transaction(&mut conn, &signed_tx, false, ASTRules::PrecheckSize, None)
             .unwrap();
 
             conn.commit_block();
@@ -3294,12 +3230,7 @@ pub mod test {
                 &ConsensusHash([(dbi + 1) as u8; 20]),
                 &BlockHeaderHash([(dbi + 1) as u8; 32]),
             );
-            let (_fee, _) = FunaiChainState::process_transaction(
-                &mut conn,
-                &signed_tx,
-                false,
-                ASTRules::PrecheckSize,
-            )
+            let (_fee, _) = FunaiChainState::process_transaction(&mut conn, &signed_tx, false, ASTRules::PrecheckSize, None)
             .unwrap();
 
             let next_nonce = 0;
@@ -3332,12 +3263,7 @@ pub mod test {
                 assert_eq!(account_2.nonce, next_nonce);
 
                 // transaction is invalid, and won't be mined
-                let res = FunaiChainState::process_transaction(
-                    &mut conn,
-                    &signed_tx_2,
-                    false,
-                    ASTRules::PrecheckSize,
-                );
+                let res = FunaiChainState::process_transaction(&mut conn, &signed_tx_2, false, ASTRules::PrecheckSize, None);
                 assert!(res.is_err());
 
                 // nonce should NOT have incremented
@@ -3368,6 +3294,7 @@ pub mod test {
             &signed_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
 
@@ -3403,12 +3330,7 @@ pub mod test {
             assert_eq!(account_2.nonce, next_nonce);
 
             // this is expected to be mined
-            let res = FunaiChainState::process_transaction(
-                &mut conn,
-                &signed_tx_2,
-                false,
-                ASTRules::PrecheckSize,
-            );
+            let res = FunaiChainState::process_transaction(&mut conn, &signed_tx_2, false, ASTRules::PrecheckSize, None);
             assert!(res.is_ok());
 
             next_nonce += 1;
@@ -3533,12 +3455,7 @@ pub mod test {
                 FunaiChainState::get_data_var(&mut conn, &contract_id, "bar").unwrap();
             assert!(var_before_res.is_none());
 
-            let (fee, _) = FunaiChainState::process_transaction(
-                &mut conn,
-                &signed_tx,
-                false,
-                ASTRules::PrecheckSize,
-            )
+            let (fee, _) = FunaiChainState::process_transaction(&mut conn, &signed_tx, false, ASTRules::PrecheckSize, None)
             .unwrap();
 
             let account_publisher =
@@ -3549,12 +3466,7 @@ pub mod test {
                 FunaiChainState::get_data_var(&mut conn, &contract_id, "bar").unwrap();
             assert_eq!(var_before_set_res, Some(Value::Int(0)));
 
-            let (fee_2, _) = FunaiChainState::process_transaction(
-                &mut conn,
-                &signed_tx_2,
-                false,
-                ASTRules::PrecheckSize,
-            )
+            let (fee_2, _) = FunaiChainState::process_transaction(&mut conn, &signed_tx_2, false, ASTRules::PrecheckSize, None)
             .unwrap();
 
             let account_origin =
@@ -4065,12 +3977,7 @@ pub mod test {
             .unwrap_err();
 
             // publish contract
-            let _ = FunaiChainState::process_transaction(
-                &mut conn,
-                &signed_contract_tx,
-                false,
-                ASTRules::PrecheckSize,
-            )
+            let _ = FunaiChainState::process_transaction(&mut conn, &signed_contract_tx, false, ASTRules::PrecheckSize, None)
             .unwrap();
 
             // no initial stackaroos balance
@@ -4090,12 +3997,7 @@ pub mod test {
             let mut expected_next_name: u64 = 0;
 
             for tx_pass in post_conditions_pass.iter() {
-                let (_fee, _) = FunaiChainState::process_transaction(
-                    &mut conn,
-                    &tx_pass,
-                    false,
-                    ASTRules::PrecheckSize,
-                )
+                let (_fee, _) = FunaiChainState::process_transaction(&mut conn, &tx_pass, false, ASTRules::PrecheckSize, None)
                 .unwrap();
                 expected_stackaroos_balance += 100;
                 expected_nonce += 1;
@@ -4120,12 +4022,7 @@ pub mod test {
             }
 
             for tx_pass in post_conditions_pass_payback.iter() {
-                let (_fee, _) = FunaiChainState::process_transaction(
-                    &mut conn,
-                    &tx_pass,
-                    false,
-                    ASTRules::PrecheckSize,
-                )
+                let (_fee, _) = FunaiChainState::process_transaction(&mut conn, &tx_pass, false, ASTRules::PrecheckSize, None)
                 .unwrap();
                 expected_stackaroos_balance -= 100;
                 expected_payback_stackaroos_balance += 100;
@@ -4167,12 +4064,7 @@ pub mod test {
             }
 
             for (_i, tx_pass) in post_conditions_pass_nft.iter().enumerate() {
-                let (_fee, _) = FunaiChainState::process_transaction(
-                    &mut conn,
-                    &tx_pass,
-                    false,
-                    ASTRules::PrecheckSize,
-                )
+                let (_fee, _) = FunaiChainState::process_transaction(&mut conn, &tx_pass, false, ASTRules::PrecheckSize, None)
                 .unwrap();
                 expected_nonce += 1;
 
@@ -4197,12 +4089,7 @@ pub mod test {
             }
 
             for tx_fail in post_conditions_fail.iter() {
-                let (_fee, _) = FunaiChainState::process_transaction(
-                    &mut conn,
-                    &tx_fail,
-                    false,
-                    ASTRules::PrecheckSize,
-                )
+                let (_fee, _) = FunaiChainState::process_transaction(&mut conn, &tx_fail, false, ASTRules::PrecheckSize, None)
                 .unwrap();
                 expected_nonce += 1;
 
@@ -4240,12 +4127,7 @@ pub mod test {
             }
 
             for tx_fail in post_conditions_fail_payback.iter() {
-                let (_fee, _) = FunaiChainState::process_transaction(
-                    &mut conn,
-                    &tx_fail,
-                    false,
-                    ASTRules::PrecheckSize,
-                )
+                let (_fee, _) = FunaiChainState::process_transaction(&mut conn, &tx_fail, false, ASTRules::PrecheckSize, None)
                 .unwrap();
                 expected_recv_nonce += 1;
 
@@ -4288,12 +4170,7 @@ pub mod test {
             }
 
             for (_i, tx_fail) in post_conditions_fail_nft.iter().enumerate() {
-                let (_fee, _) = FunaiChainState::process_transaction(
-                    &mut conn,
-                    &tx_fail,
-                    false,
-                    ASTRules::PrecheckSize,
-                )
+                let (_fee, _) = FunaiChainState::process_transaction(&mut conn, &tx_fail, false, ASTRules::PrecheckSize, None)
                 .unwrap();
                 expected_nonce += 1;
 
@@ -4788,12 +4665,7 @@ pub mod test {
             .unwrap_err();
 
             // publish contract
-            let _ = FunaiChainState::process_transaction(
-                &mut conn,
-                &signed_contract_tx,
-                false,
-                ASTRules::PrecheckSize,
-            )
+            let _ = FunaiChainState::process_transaction(&mut conn, &signed_contract_tx, false, ASTRules::PrecheckSize, None)
             .unwrap();
 
             // no initial stackaroos balance
@@ -4812,12 +4684,7 @@ pub mod test {
             let mut expected_payback_stackaroos_balance = 0;
 
             for (_i, tx_pass) in post_conditions_pass.iter().enumerate() {
-                let (_fee, _) = FunaiChainState::process_transaction(
-                    &mut conn,
-                    &tx_pass,
-                    false,
-                    ASTRules::PrecheckSize,
-                )
+                let (_fee, _) = FunaiChainState::process_transaction(&mut conn, &tx_pass, false, ASTRules::PrecheckSize, None)
                 .unwrap();
                 expected_stackaroos_balance += 100;
                 expected_nonce += 1;
@@ -4859,12 +4726,7 @@ pub mod test {
             }
 
             for (_i, tx_pass) in post_conditions_pass_payback.iter().enumerate() {
-                let (_fee, _) = FunaiChainState::process_transaction(
-                    &mut conn,
-                    &tx_pass,
-                    false,
-                    ASTRules::PrecheckSize,
-                )
+                let (_fee, _) = FunaiChainState::process_transaction(&mut conn, &tx_pass, false, ASTRules::PrecheckSize, None)
                 .unwrap();
                 expected_stackaroos_balance -= 100;
                 expected_payback_stackaroos_balance += 100;
@@ -4925,12 +4787,7 @@ pub mod test {
             }
 
             for (_i, tx_fail) in post_conditions_fail.iter().enumerate() {
-                let (_fee, _) = FunaiChainState::process_transaction(
-                    &mut conn,
-                    &tx_fail,
-                    false,
-                    ASTRules::PrecheckSize,
-                )
+                let (_fee, _) = FunaiChainState::process_transaction(&mut conn, &tx_fail, false, ASTRules::PrecheckSize, None)
                 .unwrap();
                 expected_nonce += 1;
 
@@ -4983,12 +4840,7 @@ pub mod test {
 
             for (_i, tx_fail) in post_conditions_fail_payback.iter().enumerate() {
                 eprintln!("tx fail {:?}", &tx_fail);
-                let (_fee, _) = FunaiChainState::process_transaction(
-                    &mut conn,
-                    &tx_fail,
-                    false,
-                    ASTRules::PrecheckSize,
-                )
+                let (_fee, _) = FunaiChainState::process_transaction(&mut conn, &tx_fail, false, ASTRules::PrecheckSize, None)
                 .unwrap();
                 expected_recv_nonce += 1;
 
@@ -5150,20 +5002,10 @@ pub mod test {
             );
 
             // publish contract
-            let _ = FunaiChainState::process_transaction(
-                &mut conn,
-                &signed_contract_tx,
-                false,
-                ASTRules::PrecheckSize,
-            )
+            let _ = FunaiChainState::process_transaction(&mut conn, &signed_contract_tx, false, ASTRules::PrecheckSize, None)
             .unwrap();
 
-            let (_fee, receipt) = FunaiChainState::process_transaction(
-                &mut conn,
-                &contract_call_tx,
-                false,
-                ASTRules::PrecheckSize,
-            )
+            let (_fee, receipt) = FunaiChainState::process_transaction(&mut conn, &contract_call_tx, false, ASTRules::PrecheckSize, None)
             .unwrap();
 
             assert_eq!(receipt.post_condition_aborted, true);
@@ -8280,19 +8122,9 @@ pub mod test {
                 &ConsensusHash([(dbi + 1) as u8; 20]),
                 &BlockHeaderHash([(dbi + 1) as u8; 32]),
             );
-            let (fee, _) = FunaiChainState::process_transaction(
-                &mut conn,
-                &signed_contract_tx,
-                false,
-                ASTRules::PrecheckSize,
-            )
+            let (fee, _) = FunaiChainState::process_transaction(&mut conn, &signed_contract_tx, false, ASTRules::PrecheckSize, None)
             .unwrap();
-            let err = FunaiChainState::process_transaction(
-                &mut conn,
-                &signed_contract_call_tx,
-                false,
-                ASTRules::PrecheckSize,
-            )
+            let err = FunaiChainState::process_transaction(&mut conn, &signed_contract_call_tx, false, ASTRules::PrecheckSize, None)
             .unwrap_err();
 
             conn.commit_block();
@@ -8320,6 +8152,7 @@ pub mod test {
             &signed_contract_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         let (fee, _) = FunaiChainState::process_transaction(
@@ -8327,6 +8160,7 @@ pub mod test {
             &signed_contract_call_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
 
@@ -8469,12 +8303,7 @@ pub mod test {
             let signed_tx_poison_microblock = signer.get_tx().unwrap();
 
             // process it!
-            let (fee, receipt) = FunaiChainState::process_transaction(
-                &mut conn,
-                &signed_tx_poison_microblock,
-                false,
-                ASTRules::PrecheckSize,
-            )
+            let (fee, receipt) = FunaiChainState::process_transaction(&mut conn, &signed_tx_poison_microblock, false, ASTRules::PrecheckSize, None)
             .unwrap();
 
             // there must be a poison record for this microblock, from the reporter, for the microblock
@@ -8589,12 +8418,7 @@ pub mod test {
 
             // should fail to process -- the transaction is invalid if it doesn't point to a known
             // microblock pubkey hash.
-            let err = FunaiChainState::process_transaction(
-                &mut conn,
-                &signed_tx_poison_microblock,
-                false,
-                ASTRules::PrecheckSize,
-            )
+            let err = FunaiChainState::process_transaction(&mut conn, &signed_tx_poison_microblock, false, ASTRules::PrecheckSize, None)
             .unwrap_err();
             if let Error::ClarityError(clarity_error::BadTransaction(msg)) = err {
                 assert!(msg.find("never seen in this fork").is_some());
@@ -8708,12 +8532,7 @@ pub mod test {
             let signed_tx_poison_microblock_2 = signer.get_tx().unwrap();
 
             // process it!
-            let (fee, receipt) = FunaiChainState::process_transaction(
-                &mut conn,
-                &signed_tx_poison_microblock_1,
-                false,
-                ASTRules::PrecheckSize,
-            )
+            let (fee, receipt) = FunaiChainState::process_transaction(&mut conn, &signed_tx_poison_microblock_1, false, ASTRules::PrecheckSize, None)
             .unwrap();
 
             // there must be a poison record for this microblock, from the reporter, for the microblock
@@ -8722,12 +8541,7 @@ pub mod test {
             assert_eq!(report_opt.unwrap(), (reporter_addr_1, 123));
 
             // process the second one!
-            let (fee, receipt) = FunaiChainState::process_transaction(
-                &mut conn,
-                &signed_tx_poison_microblock_2,
-                false,
-                ASTRules::PrecheckSize,
-            )
+            let (fee, receipt) = FunaiChainState::process_transaction(&mut conn, &signed_tx_poison_microblock_2, false, ASTRules::PrecheckSize, None)
             .unwrap();
 
             // there must be a poison record for this microblock, from the reporter, for the microblock
@@ -8986,6 +8800,7 @@ pub mod test {
             &smart_contract_v2,
             false,
             ASTRules::PrecheckSize,
+            None,
         ) {
             assert!(msg.find("not in Funai epoch 2.1 or later").is_some());
         } else {
@@ -9278,6 +9093,7 @@ pub mod test {
             &signed_contract_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 0);
@@ -9287,6 +9103,7 @@ pub mod test {
             &signed_contract_call_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -9306,6 +9123,7 @@ pub mod test {
             &signed_contract_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 0);
@@ -9315,6 +9133,7 @@ pub mod test {
             &signed_contract_call_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -9334,6 +9153,7 @@ pub mod test {
             &signed_contract_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 0);
@@ -9343,6 +9163,7 @@ pub mod test {
             &signed_contract_call_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap_err();
         conn.commit_block();
@@ -9454,6 +9275,7 @@ pub mod test {
             &signed_contract_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 0);
@@ -9463,6 +9285,7 @@ pub mod test {
             &signed_contract_call_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -9482,6 +9305,7 @@ pub mod test {
             &signed_contract_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 0);
@@ -9491,6 +9315,7 @@ pub mod test {
             &signed_contract_call_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -9510,6 +9335,7 @@ pub mod test {
             &signed_contract_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 0);
@@ -9519,6 +9345,7 @@ pub mod test {
             &signed_contract_call_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap_err();
         conn.commit_block();
@@ -9768,6 +9595,7 @@ pub mod test {
             &signed_runtime_checkerror_trait_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -9777,6 +9605,7 @@ pub mod test {
             &signed_runtime_checkerror_impl_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -9786,6 +9615,7 @@ pub mod test {
             &signed_runtime_checkerror_tx_clar1,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -9795,6 +9625,7 @@ pub mod test {
             &signed_test_trait_checkerror_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap_err();
         if let Error::ClarityError(clarity_error::Interpreter(InterpreterError::Unchecked(
@@ -9812,6 +9643,7 @@ pub mod test {
             &signed_runtime_checkerror_cc_contract_tx_clar1,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap_err();
         if let Error::ClarityError(clarity_error::Interpreter(InterpreterError::Unchecked(
@@ -9840,6 +9672,7 @@ pub mod test {
             &signed_runtime_checkerror_trait_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -9849,6 +9682,7 @@ pub mod test {
             &signed_runtime_checkerror_impl_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -9858,6 +9692,7 @@ pub mod test {
             &signed_runtime_checkerror_tx_clar1,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -9867,6 +9702,7 @@ pub mod test {
             &signed_test_trait_checkerror_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap_err();
         if let Error::ClarityError(clarity_error::Interpreter(InterpreterError::Unchecked(
@@ -9884,6 +9720,7 @@ pub mod test {
             &signed_runtime_checkerror_cc_contract_tx_clar1,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap_err();
         if let Error::ClarityError(clarity_error::Interpreter(InterpreterError::Unchecked(
@@ -9919,6 +9756,7 @@ pub mod test {
             &signed_runtime_checkerror_trait_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -9928,6 +9766,7 @@ pub mod test {
             &signed_runtime_checkerror_impl_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -9937,6 +9776,7 @@ pub mod test {
             &signed_runtime_checkerror_tx_clar1,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -9946,6 +9786,7 @@ pub mod test {
             &signed_test_trait_checkerror_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -9970,6 +9811,7 @@ pub mod test {
             &signed_runtime_checkerror_cc_contract_tx_clar1,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10005,6 +9847,7 @@ pub mod test {
             &signed_runtime_checkerror_trait_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10014,6 +9857,7 @@ pub mod test {
             &signed_runtime_checkerror_impl_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10023,6 +9867,7 @@ pub mod test {
             &signed_runtime_checkerror_tx_clar2,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10032,6 +9877,7 @@ pub mod test {
             &signed_test_trait_checkerror_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10052,6 +9898,7 @@ pub mod test {
             &signed_runtime_checkerror_cc_contract_tx_clar2,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10241,6 +10088,7 @@ pub mod test {
             &signed_foo_trait_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10250,6 +10098,7 @@ pub mod test {
             &signed_foo_impl_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10259,6 +10108,7 @@ pub mod test {
             &signed_call_foo_tx_clar1,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10286,6 +10136,7 @@ pub mod test {
             &signed_foo_trait_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10295,6 +10146,7 @@ pub mod test {
             &signed_foo_impl_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10304,6 +10156,7 @@ pub mod test {
             &signed_call_foo_tx_clar1,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10320,6 +10173,7 @@ pub mod test {
             &signed_test_call_foo_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap_err();
         if let Error::ClarityError(clarity_error::Interpreter(InterpreterError::Unchecked(
@@ -10346,6 +10200,7 @@ pub mod test {
             &signed_foo_trait_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10355,6 +10210,7 @@ pub mod test {
             &signed_foo_impl_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10364,6 +10220,7 @@ pub mod test {
             &signed_call_foo_tx_clar1,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10391,6 +10248,7 @@ pub mod test {
             &signed_foo_trait_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10400,6 +10258,7 @@ pub mod test {
             &signed_foo_impl_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10409,6 +10268,7 @@ pub mod test {
             &signed_call_foo_tx_clar2,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10418,6 +10278,7 @@ pub mod test {
             &signed_test_call_foo_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10654,6 +10515,7 @@ pub mod test {
             &signed_foo_trait_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10663,6 +10525,7 @@ pub mod test {
             &signed_transitive_trait_clar1_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10672,6 +10535,7 @@ pub mod test {
             &signed_foo_impl_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10681,6 +10545,7 @@ pub mod test {
             &signed_call_foo_tx_clar1,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10690,6 +10555,7 @@ pub mod test {
             &signed_test_call_foo_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap_err();
         if let Error::ClarityError(clarity_error::Interpreter(InterpreterError::Unchecked(
@@ -10717,6 +10583,7 @@ pub mod test {
             &signed_foo_trait_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10726,6 +10593,7 @@ pub mod test {
             &signed_transitive_trait_clar1_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10735,6 +10603,7 @@ pub mod test {
             &signed_foo_impl_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10744,6 +10613,7 @@ pub mod test {
             &signed_call_foo_tx_clar1,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10753,6 +10623,7 @@ pub mod test {
             &signed_test_call_foo_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap_err();
         if let Error::ClarityError(clarity_error::Interpreter(InterpreterError::Unchecked(
@@ -10779,6 +10650,7 @@ pub mod test {
             &signed_foo_trait_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10788,6 +10660,7 @@ pub mod test {
             &signed_transitive_trait_clar1_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10797,6 +10670,7 @@ pub mod test {
             &signed_foo_impl_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10806,6 +10680,7 @@ pub mod test {
             &signed_call_foo_tx_clar1,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10815,6 +10690,7 @@ pub mod test {
             &signed_test_call_foo_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10846,6 +10722,7 @@ pub mod test {
             &signed_foo_trait_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10855,6 +10732,7 @@ pub mod test {
             &signed_transitive_trait_clar1_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10864,6 +10742,7 @@ pub mod test {
             &signed_foo_impl_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10873,6 +10752,7 @@ pub mod test {
             &signed_call_foo_tx_clar2,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10882,6 +10762,7 @@ pub mod test {
             &signed_test_call_foo_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10913,6 +10794,7 @@ pub mod test {
             &signed_foo_trait_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10922,6 +10804,7 @@ pub mod test {
             &signed_transitive_trait_clar2_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10931,6 +10814,7 @@ pub mod test {
             &signed_foo_impl_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10940,6 +10824,7 @@ pub mod test {
             &signed_call_foo_tx_clar2,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10967,6 +10852,7 @@ pub mod test {
             &signed_foo_trait_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10976,6 +10862,7 @@ pub mod test {
             &signed_transitive_trait_clar2_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10985,6 +10872,7 @@ pub mod test {
             &signed_foo_impl_tx,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);
@@ -10994,6 +10882,7 @@ pub mod test {
             &signed_call_foo_tx_clar1,
             false,
             ASTRules::PrecheckSize,
+            None,
         )
         .unwrap();
         assert_eq!(fee, 1);

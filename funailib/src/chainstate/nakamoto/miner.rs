@@ -608,7 +608,7 @@ impl BlockBuilder for NakamotoBlockBuilder {
                 return TransactionResult::problematic(&tx, Error::NetError(e));
             }
             let (fee, receipt) = match FunaiChainState::process_transaction(
-                clarity_tx, tx, quiet, ast_rules,
+                clarity_tx, tx, quiet, ast_rules, None,
             ) {
                 Ok((fee, receipt)) => (fee, receipt),
                 Err(e) => {
