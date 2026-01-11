@@ -28,7 +28,7 @@ use clarity::vm::clarity::TransactionConnection;
 use clarity::vm::costs::ExecutionCost;
 use clarity::vm::database::BurnStateDB;
 use clarity::vm::errors::Error as InterpreterError;
-use clarity::vm::types::{QualifiedContractIdentifier, TypeSignature};
+use clarity::vm::types::{QualifiedContractIdentifier, TypeSignature, FunaiAddressExtensions as ClarityFunaiAddressExtensions};
 use libfunaidb::FunaiDBChunkData;
 use serde::Deserialize;
 use funai_common::codec::{read_next, write_next, Error as CodecError, FunaiMessageCodec};
@@ -593,6 +593,13 @@ impl BlockBuilder for NakamotoBlockBuilder {
         };
 
         let quiet = !cfg!(test);
+        
+        // Extract miner address from coinbase transaction for Infer tx processing
+        // This must match the follower's behavior in append_block to ensure deterministic state roots
+        let miner_address = self.coinbase_tx.as_ref().map(|coinbase_tx| {
+            coinbase_tx.get_origin().get_address(clarity_tx.config.mainnet).to_account_principal()
+        });
+        
         let result = {
             // preemptively skip problematic transactions
             if let Err(e) = Relayer::static_check_problematic_relayed_tx(
@@ -608,7 +615,7 @@ impl BlockBuilder for NakamotoBlockBuilder {
                 return TransactionResult::problematic(&tx, Error::NetError(e));
             }
             let (fee, receipt) = match FunaiChainState::process_transaction(
-                clarity_tx, tx, quiet, ast_rules, None,
+                clarity_tx, tx, quiet, ast_rules, miner_address,
             ) {
                 Ok((fee, receipt)) => (fee, receipt),
                 Err(e) => {

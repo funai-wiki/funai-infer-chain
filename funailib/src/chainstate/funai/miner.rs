@@ -1593,12 +1593,28 @@ impl FunaiBlockBuilder {
         }
 
         let quiet = !cfg!(test);
-        let miner_pubk = FunaiPublicKey::from_private(&self.miner_privkey);
-        let miner_address = FunaiAddress::p2pkh(clarity_tx.config.mainnet, &miner_pubk).to_account_principal();
+        
+        // Extract miner address from coinbase transaction to match validation behavior
+        let miner_address = self.txs.iter()
+            .find(|tx| matches!(tx.payload, TransactionPayload::Coinbase(..)))
+            .map(|coinbase_tx| {
+                let miner_addr = coinbase_tx.get_origin().get_address(clarity_tx.config.mainnet);
+                let evaluated_epoch = clarity_tx.get_epoch();
+                if evaluated_epoch >= FunaiEpochId::Epoch21 {
+                    match coinbase_tx.try_as_coinbase() {
+                        Some((_, recipient_opt, _)) => recipient_opt
+                            .cloned()
+                            .unwrap_or(miner_addr.to_account_principal()),
+                        None => miner_addr.to_account_principal(),
+                    }
+                } else {
+                    miner_addr.to_account_principal()
+                }
+            });
         
         if !self.anchored_done {
             // save
-            match FunaiChainState::process_transaction(clarity_tx, tx, quiet, ASTRules::Typical, Some(miner_address.clone())) {
+            match FunaiChainState::process_transaction(clarity_tx, tx, quiet, ASTRules::Typical, miner_address.clone()) {
                 Ok((fee, receipt)) => {
                     self.total_anchored_fees += fee;
                 }
@@ -1609,7 +1625,7 @@ impl FunaiBlockBuilder {
 
             self.txs.push(tx.clone());
         } else {
-            match FunaiChainState::process_transaction(clarity_tx, tx, quiet, ASTRules::Typical, Some(miner_address)) {
+            match FunaiChainState::process_transaction(clarity_tx, tx, quiet, ASTRules::Typical, miner_address) {
                 Ok((fee, receipt)) => {
                     self.total_streamed_fees += fee;
                 }
@@ -2607,8 +2623,25 @@ impl BlockBuilder for FunaiBlockBuilder {
         };
 
         let quiet = !cfg!(test);
-        let miner_pubk = FunaiPublicKey::from_private(&self.miner_privkey);
-        let miner_address = FunaiAddress::p2pkh(clarity_tx.config.mainnet, &miner_pubk).to_account_principal();
+        
+        // Extract miner address from coinbase transaction to match validation behavior
+        // This must match the follower's behavior in append_block to ensure deterministic state roots
+        let miner_address = self.txs.iter()
+            .find(|tx| matches!(tx.payload, TransactionPayload::Coinbase(..)))
+            .map(|coinbase_tx| {
+                let miner_addr = coinbase_tx.get_origin().get_address(clarity_tx.config.mainnet);
+                let evaluated_epoch = clarity_tx.get_epoch();
+                if evaluated_epoch >= FunaiEpochId::Epoch21 {
+                    match coinbase_tx.try_as_coinbase() {
+                        Some((_, recipient_opt, _)) => recipient_opt
+                            .cloned()
+                            .unwrap_or(miner_addr.to_account_principal()),
+                        None => miner_addr.to_account_principal(),
+                    }
+                } else {
+                    miner_addr.to_account_principal()
+                }
+            });
 
         let result = if !self.anchored_done {
             // building up the anchored blocks
@@ -2638,7 +2671,7 @@ impl BlockBuilder for FunaiBlockBuilder {
                 return TransactionResult::problematic(&tx, Error::NetError(e));
             }
             let (fee, receipt) = match FunaiChainState::process_transaction(
-                clarity_tx, tx, quiet, ast_rules, Some(miner_address.clone()),
+                clarity_tx, tx, quiet, ast_rules, miner_address.clone(),
             ) {
                 Ok((fee, receipt)) => (fee, receipt),
                 Err(e) => {
@@ -2719,7 +2752,7 @@ impl BlockBuilder for FunaiBlockBuilder {
                 return TransactionResult::problematic(&tx, Error::NetError(e));
             }
             let (fee, receipt) = match FunaiChainState::process_transaction(
-                clarity_tx, tx, quiet, ast_rules, Some(miner_address),
+                clarity_tx, tx, quiet, ast_rules, miner_address,
             ) {
                 Ok((fee, receipt)) => (fee, receipt),
                 Err(e) => {
