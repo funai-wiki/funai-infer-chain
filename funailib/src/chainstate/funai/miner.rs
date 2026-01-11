@@ -1595,22 +1595,33 @@ impl FunaiBlockBuilder {
         let quiet = !cfg!(test);
         
         // Extract miner address from coinbase transaction to match validation behavior
-        let miner_address = self.txs.iter()
-            .find(|tx| matches!(tx.payload, TransactionPayload::Coinbase(..)))
-            .map(|coinbase_tx| {
-                let miner_addr = coinbase_tx.get_origin().get_address(clarity_tx.config.mainnet);
-                let evaluated_epoch = clarity_tx.get_epoch();
-                if evaluated_epoch >= FunaiEpochId::Epoch21 {
-                    match coinbase_tx.try_as_coinbase() {
-                        Some((_, recipient_opt, _)) => recipient_opt
-                            .cloned()
-                            .unwrap_or(miner_addr.to_account_principal()),
-                        None => miner_addr.to_account_principal(),
-                    }
-                } else {
-                    miner_addr.to_account_principal()
+        // First check if current tx is coinbase, otherwise look in already-processed transactions
+        let extract_miner_addr = |coinbase_tx: &FunaiTransaction, mainnet: bool, epoch: FunaiEpochId| -> PrincipalData {
+            let miner_addr = coinbase_tx.get_origin().get_address(mainnet);
+            if epoch >= FunaiEpochId::Epoch21 {
+                match coinbase_tx.try_as_coinbase() {
+                    Some((_, recipient_opt, _)) => recipient_opt
+                        .cloned()
+                        .unwrap_or(miner_addr.to_account_principal()),
+                    None => miner_addr.to_account_principal(),
                 }
-            });
+            } else {
+                miner_addr.to_account_principal()
+            }
+        };
+        
+        let evaluated_epoch = clarity_tx.get_epoch();
+        let mainnet = clarity_tx.config.mainnet;
+        
+        // Check if current tx is coinbase first
+        let miner_address = if matches!(tx.payload, TransactionPayload::Coinbase(..)) {
+            Some(extract_miner_addr(tx, mainnet, evaluated_epoch))
+        } else {
+            // Look for coinbase in already-processed transactions
+            self.txs.iter()
+                .find(|t| matches!(t.payload, TransactionPayload::Coinbase(..)))
+                .map(|coinbase_tx| extract_miner_addr(coinbase_tx, mainnet, evaluated_epoch))
+        };
         
         if !self.anchored_done {
             // save
@@ -2626,22 +2637,33 @@ impl BlockBuilder for FunaiBlockBuilder {
         
         // Extract miner address from coinbase transaction to match validation behavior
         // This must match the follower's behavior in append_block to ensure deterministic state roots
-        let miner_address = self.txs.iter()
-            .find(|tx| matches!(tx.payload, TransactionPayload::Coinbase(..)))
-            .map(|coinbase_tx| {
-                let miner_addr = coinbase_tx.get_origin().get_address(clarity_tx.config.mainnet);
-                let evaluated_epoch = clarity_tx.get_epoch();
-                if evaluated_epoch >= FunaiEpochId::Epoch21 {
-                    match coinbase_tx.try_as_coinbase() {
-                        Some((_, recipient_opt, _)) => recipient_opt
-                            .cloned()
-                            .unwrap_or(miner_addr.to_account_principal()),
-                        None => miner_addr.to_account_principal(),
-                    }
-                } else {
-                    miner_addr.to_account_principal()
+        // First check if current tx is coinbase, otherwise look in already-processed transactions
+        let extract_miner_addr = |coinbase_tx: &FunaiTransaction, mainnet: bool, epoch: FunaiEpochId| -> PrincipalData {
+            let miner_addr = coinbase_tx.get_origin().get_address(mainnet);
+            if epoch >= FunaiEpochId::Epoch21 {
+                match coinbase_tx.try_as_coinbase() {
+                    Some((_, recipient_opt, _)) => recipient_opt
+                        .cloned()
+                        .unwrap_or(miner_addr.to_account_principal()),
+                    None => miner_addr.to_account_principal(),
                 }
-            });
+            } else {
+                miner_addr.to_account_principal()
+            }
+        };
+        
+        let evaluated_epoch = clarity_tx.get_epoch();
+        let mainnet = clarity_tx.config.mainnet;
+        
+        // Check if current tx is coinbase first
+        let miner_address = if matches!(tx.payload, TransactionPayload::Coinbase(..)) {
+            Some(extract_miner_addr(tx, mainnet, evaluated_epoch))
+        } else {
+            // Look for coinbase in already-processed transactions
+            self.txs.iter()
+                .find(|t| matches!(t.payload, TransactionPayload::Coinbase(..)))
+                .map(|coinbase_tx| extract_miner_addr(coinbase_tx, mainnet, evaluated_epoch))
+        };
 
         let result = if !self.anchored_done {
             // building up the anchored blocks

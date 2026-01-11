@@ -29,34 +29,34 @@ fn generate_signature_headers(path: &str, body_json: &str) -> Option<(String, St
     // 2. Fallback to environment variable STX_PRIVATE_KEY
     let priv_key_hex = get_private_key()
         .or_else(|| std::env::var("STX_PRIVATE_KEY").ok())?;
-    
+
     // Remove the last byte if it's a type marker (e.g., 01 for compressed)
     let raw_priv_hex = if priv_key_hex.len() > 64 {
         &priv_key_hex[..64]
     } else {
         &priv_key_hex[..]
     };
-    
+
     let priv_bytes = hex::decode(raw_priv_hex).ok()?;
     if priv_bytes.len() != 32 {
         return None;
     }
-    
+
     let signing_key = SigningKey::from_slice(&priv_bytes).ok()?;
-    
+
     // Get compressed public key
     let pubkey_point: EncodedPoint = signing_key.verifying_key().to_encoded_point(true);
     let pubkey_hex = hex::encode(pubkey_point.as_bytes());
-    
+
     // Generate timestamp and message
     let timestamp = Utc::now().timestamp().to_string();
     let message = format!("{}:{}:{}", timestamp, path, body_json);
-    
+
     // Sign the message
     let digest = Sha256::digest(message.as_bytes());
     let signature: Signature = signing_key.sign_prehash(&digest).ok()?;
     let sig_der_hex = hex::encode(signature.to_bytes());
-    
+
     Some((pubkey_hex, sig_der_hex, timestamp))
 }
 
@@ -82,10 +82,10 @@ pub async fn infer(user_input: &str, context_messages: Option<Vec<ChatCompletion
         prompt: user_input.to_string(),
     };
     let body_json = serde_json::to_string(&request_body).unwrap_or_default();
-    
+
     // Generate signature headers if private key is available
     let mut request = reqwest::Client::new()
-        .post("http://127.0.0.1:8000/generate");
+        .post("http://34.143.166.224:8000/generate");
 
     if let Some((pubkey_hex, sig_der_hex, timestamp)) = generate_signature_headers("/generate", &body_json) {
         request = request
@@ -147,7 +147,7 @@ pub async fn infer_check(user_input: &str, output: &str, context_messages: Optio
 
     // Generate signature headers if private key is available
     let mut request = reqwest::Client::new()
-        .post("http://127.0.0.1:8000/generate");
+        .post("http://34.143.166.224:8000/generate");
 
     if let Some((pubkey_hex, sig_der_hex, timestamp)) = generate_signature_headers("/generate", &body_json) {
         request = request
@@ -190,15 +190,15 @@ pub async fn random_question() -> Result<String, Box<dyn error::Error>> {
 
     // Generate signature headers if private key is available
     let mut request = reqwest::Client::new()
-        .post("http://127.0.0.1:8000/generate");
-    
+        .post("http://34.143.166.224:8000/generate");
+
     if let Some((pubkey_hex, sig_der_hex, timestamp)) = generate_signature_headers("/generate", &body_json) {
         request = request
             .header("X-Address", pubkey_hex)
             .header("X-Signature", sig_der_hex)
             .header("X-Timestamp", timestamp);
     }
-    
+
     let response = request
         .json(&request_body)
         .send()
@@ -260,11 +260,15 @@ pub fn infer_chain(txid: String, user_input: &str, context_messages: Option<Vec<
     Ok(InferStatus::Created)
 }
 
+pub fn get_output_hash(output: &str) -> String {
+    hex::encode(Sha256Sum::from_data(output.as_bytes()))
+}
+
 pub fn save_infer_result(txid: String, user_input: &str, output: &str, node_id: &str) -> Result<(), Box<dyn error::Error>> {
     info!("save_infer_result txid: {} node: {}", txid, node_id);
     let llm_db = db::open(db::get_db_path().as_str())?;
     db::sqlite_create(&llm_db, &txid, "", user_input, InferStatus::Success as u8)?;
-    let output_hash = hex::encode(Sha256Sum::from_data(output.as_bytes()));
+    let output_hash = get_output_hash(output);
     db::sqlite_end_llm(&llm_db, &txid, output, &output_hash, InferStatus::Success as u8, node_id)?;
     Ok(())
 }
