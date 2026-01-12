@@ -4444,7 +4444,7 @@ impl SortitionDB {
     }
 
     /// Get the parent burnchain header hash of a given burnchain header hash
-    fn get_parent_burnchain_header_hash(
+    pub fn get_parent_burnchain_header_hash(
         conn: &Connection,
         burnchain_header_hash: &BurnchainHeaderHash,
     ) -> Result<Option<BurnchainHeaderHash>, db_error> {

@@ -5063,13 +5063,17 @@ impl FunaiChainState {
             (latest_miners, parent_miner)
         };
 
+        // Use parent of burn_tip to avoid race conditions with unconfirmed ops
+        let burn_tip_parent = SortitionDB::get_parent_burnchain_header_hash(conn, &burn_tip)?
+            .unwrap_or(burn_tip.clone());
+
         let (stacking_burn_ops, transfer_burn_ops, delegate_burn_ops, vote_for_agg_key_burn_ops) =
             FunaiChainState::get_stacking_and_transfer_and_delegate_burn_ops(
                 chainstate_tx,
                 &parent_index_hash,
                 conn,
-                &burn_tip,
-                burn_tip_height.into(),
+                &burn_tip_parent,
+                (burn_tip_height.saturating_sub(1)).into(),
             )?;
 
         // load the execution cost of the parent block if the executor is the follower.
@@ -5215,7 +5219,7 @@ impl FunaiChainState {
 
         let auto_unlock_events = if evaluated_epoch >= FunaiEpochId::Epoch21 {
             let unlock_events = Self::check_and_handle_reward_start(
-                burn_tip_height.into(),
+                (burn_tip_height.saturating_sub(1)).into(),
                 burn_dbconn,
                 sortition_dbconn,
                 &mut clarity_tx,
