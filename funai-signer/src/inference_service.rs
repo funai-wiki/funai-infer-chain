@@ -730,6 +730,11 @@ impl InferenceServiceState {
             processing.remove(task_id).ok_or("Task not found in processing")?
         };
 
+        let completed_at = result.completed_at;
+        let duration = completed_at.saturating_sub(task.created_at);
+        info!("Inference task submission-to-completion timing: task_id={}, submitted_at={}, completed_at={}, duration={}s",
+            task_id, task.created_at, completed_at, duration);
+
         // Set result and move to completed
         task.set_result(result);
         
@@ -946,6 +951,11 @@ impl InferenceService {
             let mut completed = self.state.completed_tasks.lock().unwrap();
 
             if let Some(mut task) = processing.remove(task_id) {
+                let completed_at = result.completed_at;
+                let duration = completed_at.saturating_sub(task.created_at);
+                info!("Inference task submission-to-completion timing: task_id={}, submitted_at={}, completed_at={}, duration={}s",
+                    task_id, task.created_at, completed_at, duration);
+
                 task.set_result(result);
                 completed.insert(task_id.to_string(), task.clone());
 

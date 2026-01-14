@@ -19,6 +19,7 @@ use std::io::prelude::*;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::{cmp, fmt, fs, io};
+use chrono::{NaiveDateTime, Utc};
 
 pub use clarity::vm::analysis::errors::{CheckError, CheckErrors};
 use clarity::vm::analysis::run_analysis;
@@ -5777,7 +5778,21 @@ impl FunaiChainState {
 
             for tx in block.txs.iter() {
                 if let TransactionPayload::Infer(_from, amount, _user_input, _context, ref node_principal, _model_name, ref output_hash) = &tx.payload {
-                    info!("Processing Infer tx: amount={}, node={}, output_hash={}", amount, node_principal, output_hash);
+                    let txid = tx.txid();
+                    let txid_hex = txid.to_hex();
+                    info!("Processing Infer tx: txid={}, amount={}, node={}, output_hash={}", txid_hex, amount, node_principal, output_hash);
+                    
+                    if let Ok(result) = libllm::query_hash(txid_hex.clone()) {
+                        if !result.create_time.is_empty() {
+                            if let Ok(create_time) = NaiveDateTime::parse_from_str(&result.create_time, "%Y-%m-%d %H:%M:%S") {
+                                let now = Utc::now().naive_utc();
+                                let duration = now.signed_duration_since(create_time);
+                                info!("Infer task end-to-end timing: txid={}, submitted_to_signer={}, total_duration={}s", 
+                                    txid_hex, result.create_time, duration.num_seconds());
+                            }
+                        }
+                    }
+
                     if !output_hash.to_string().is_empty() {
                         let total_infer_amount = *amount;
                         infer_txs_fees.push((total_infer_amount, node_principal.clone()));

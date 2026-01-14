@@ -85,7 +85,7 @@ pub async fn infer(user_input: &str, context_messages: Option<Vec<ChatCompletion
 
     // Generate signature headers if private key is available
     let mut request = reqwest::Client::new()
-        .post("http://34.143.166.224:8000/generate");
+        .post("http://127.0.0.1:8000/generate");
 
     if let Some((pubkey_hex, sig_der_hex, timestamp)) = generate_signature_headers("/generate", &body_json) {
         request = request
@@ -236,7 +236,6 @@ impl From<u8> for InferStatus {
 }
 
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InferResult {
     pub txid: String,
@@ -245,6 +244,7 @@ pub struct InferResult {
     pub output: String,
     pub output_hash: String,
     pub inference_node_id: String,
+    pub create_time: String,
 }
 
 
@@ -284,6 +284,7 @@ pub fn query(txid: String) -> Result<InferResult, Box<dyn error::Error>> {
         output: result.output,
         output_hash: result.output_hash,
         inference_node_id: result.inference_node_id,
+        create_time: result.create_time,
     })
 }
 
@@ -321,7 +322,7 @@ pub fn query_hash(txid: String) -> Result<InferResult, Box<dyn error::Error>> {
             #[derive(Deserialize)]
             struct SignerTaskResponse {
                 pub status: String,
-                pub model_name: String,
+                pub created_at: u64,
                 pub result: Option<serde_json::Value>,
             }
             #[derive(Deserialize)]
@@ -346,6 +347,14 @@ pub fn query_hash(txid: String) -> Result<InferResult, Box<dyn error::Error>> {
                     } else {
                         ("".to_string(), "".to_string())
                     };
+
+                    let create_time = if task.created_at > 0 {
+                        let dt = chrono::DateTime::from_timestamp(task.created_at as i64, 0).unwrap().naive_utc();
+                        dt.format("%Y-%m-%d %H:%M:%S").to_string()
+                    } else {
+                        "".to_string()
+                    };
+
                     return Ok(InferResult {
                         txid,
                         status,
@@ -353,6 +362,7 @@ pub fn query_hash(txid: String) -> Result<InferResult, Box<dyn error::Error>> {
                         output: "".to_string(),
                         output_hash,
                         inference_node_id: node_id,
+                        create_time,
                     });
                 }
             }
@@ -368,6 +378,7 @@ pub fn query_hash(txid: String) -> Result<InferResult, Box<dyn error::Error>> {
         output: "".to_string(),
         output_hash: result.output_hash,
         inference_node_id: result.inference_node_id,
+        create_time: result.create_time,
     })
 }
 

@@ -146,6 +146,10 @@ pub struct TaskStatusResponse {
     pub max_infer_time: u64,
     /// Inference fee
     pub infer_fee: u64,
+    /// Creation time
+    pub created_at: u64,
+    /// Task status
+    pub status: String,
 }
 
 /// Heartbeat request from inference node
@@ -708,7 +712,17 @@ impl InferenceApiServer {
         match task {
             Some(task) => {
                 info!("Retrieved status for task {}: {:?}", task_id, task.status);
-                self.json_response(ApiResponse::success(task), StatusCode::OK)
+                let response = TaskStatusResponse {
+                    task_id: task.task_id.clone(),
+                    user_input: task.user_input.clone(),
+                    context: task.context.clone(),
+                    model_name: format!("{:?}", task.model_type),
+                    max_infer_time: task.max_infer_time,
+                    infer_fee: task.infer_fee,
+                    created_at: task.created_at,
+                    status: task.status.to_string(),
+                };
+                self.json_response(ApiResponse::success(response), StatusCode::OK)
             }
             None => {
                 warn!("Task {} not found", task_id);
