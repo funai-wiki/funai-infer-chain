@@ -1984,7 +1984,7 @@ impl FunaiBlockBuilder {
             &burn_dbconn.context.pox_constants,
             &self.chain_tip,
             info.burn_tip,
-            info.burn_tip_height + 1,
+            info.burn_tip_height,
             self.parent_consensus_hash,
             self.parent_header_hash,
             &info.parent_microblocks,
