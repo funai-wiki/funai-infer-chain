@@ -5056,6 +5056,23 @@ impl FunaiChainState {
                 chainstate_tx.deref_mut(),
                 chain_tip,
             )?;
+            
+            // Debug logging for state root mismatch diagnosis
+            debug!("setup_block: latest_matured_miners count={}, chain_tip_height={}, miner_id={:?}",
+                latest_miners.len(),
+                chain_tip.funai_block_height,
+                miner_id_opt
+            );
+            for (i, miner_schedule) in latest_miners.iter().enumerate() {
+                debug!("  matured_miner[{}]: recipient={}, coinbase={}, vtxindex={}, block_hash={}",
+                    i,
+                    miner_schedule.recipient,
+                    miner_schedule.coinbase,
+                    miner_schedule.vtxindex,
+                    miner_schedule.block_hash
+                );
+            }
+            
             let parent_miner = FunaiChainState::get_parent_matured_miner(
                 chainstate_tx.deref_mut(),
                 mainnet,
@@ -5317,8 +5334,24 @@ impl FunaiChainState {
         block_height: u32,
         mblock_pubkey_hash: Hash160,
     ) -> Result<Vec<FunaiTransactionEvent>, Error> {
+        // Debug logging for state root mismatch diagnosis
+        debug!("finish_block: block_height={}, has_miner_payouts={}",
+            block_height,
+            miner_payouts.is_some()
+        );
+        
         // add miner payments
-        if let Some((ref miner_reward, ref user_rewards, ref parent_reward, _)) = miner_payouts {
+        if let Some((ref miner_reward, ref user_rewards, ref parent_reward, ref reward_info)) = miner_payouts {
+            debug!("finish_block: miner_reward.total()={}, user_rewards.len()={}, parent_reward.total()={}",
+                miner_reward.total(),
+                user_rewards.len(),
+                parent_reward.total()
+            );
+            debug!("finish_block: reward_info: from_block={}, from_parent={}",
+                reward_info.from_funai_block_hash,
+                reward_info.from_parent_funai_block_hash
+            );
+            
             // grant in order by miner, then users
             let matured_ustx = FunaiChainState::process_matured_miner_rewards(
                 clarity_tx,
@@ -5326,7 +5359,8 @@ impl FunaiChainState {
                 user_rewards,
                 parent_reward,
             )?;
-
+            
+            debug!("finish_block: matured_ustx={}", matured_ustx);
             clarity_tx.increment_ustx_liquid_supply(matured_ustx);
         }
 
@@ -5647,6 +5681,13 @@ impl FunaiChainState {
                 None
             };
 
+            info!("Validator: append_block miner_address={:?}, evaluated_epoch={:?}, burn_tip_height={}, coinbase_txid={}",
+                miner_address,
+                evaluated_epoch,
+                chain_tip_burn_header_height,
+                block.get_coinbase_tx().map(|tx| tx.txid().to_string()).unwrap_or_default()
+            );
+
             let (block_fees, block_burns, txs_receipts) =
                 match FunaiChainState::process_block_transactions(
                     &mut clarity_tx,
@@ -5734,15 +5775,39 @@ impl FunaiChainState {
                 }
             }
 
+            // Log state before seal for debugging state root mismatch
+            debug!("Validator: about to seal block {} at height {} with {} txs",
+                block.block_hash(),
+                block.header.total_work.work,
+                block.txs.len()
+            );
+            
             let root_hash = clarity_tx.seal();
             if root_hash != block.header.state_index_root {
+                // Enhanced diagnostic logging for state root mismatch
+                warn!("Block {} state root mismatch: expected {}, got {}",
+                    block.block_hash(),
+                    block.header.state_index_root,
+                    root_hash,
+                );
+                warn!("Block details: burn_height={}, funai_height={}, tx_count={}, parent_block={}, parent_microblock={}",
+                    chain_tip_burn_header_height,
+                    block.header.total_work.work,
+                    block.txs.len(),
+                    block.header.parent_block,
+                    block.header.parent_microblock,
+                );
+                warn!("Transaction list in block:");
+                for (i, tx) in block.txs.iter().enumerate() {
+                    warn!("  tx[{}]: txid={}, payload={}, origin={}",
+                        i, tx.txid(), tx.payload.name(), tx.origin_address());
+                }
                 let msg = format!(
                     "Block {} state root mismatch: expected {}, got {}",
                     block.block_hash(),
                     block.header.state_index_root,
                     root_hash,
                 );
-                warn!("{}", &msg);
 
                 clarity_tx.rollback_block();
                 return Err(Error::InvalidFunaiBlock(msg));

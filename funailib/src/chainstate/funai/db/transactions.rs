@@ -1519,6 +1519,10 @@ impl FunaiChainState {
                     // Transfer 90% to node_principal
                     let node_amount = (*amount as u128 * 90) / 100;
 
+                    // Debug logging for state root mismatch diagnosis
+                    info!("Processing Infer tx: txid={}, amount={}, miner_amount={}, node_amount={}, node_principal={}, miner_address={:?}",
+                        tx.txid(), amount, miner_amount, node_amount, node_principal, miner_address);
+
                     if node_amount > 0 {
                         let (_, _asset_map_transfer, events_transfer) = clarity_tx
                             .run_stx_transfer(

@@ -1702,6 +1702,13 @@ impl FunaiBlockBuilder {
             self.header.parent_microblock_sequence,
             state_root_hash
         );
+        
+        // Log transaction details for state root mismatch debugging
+        debug!("Miner: Transaction list in mined block:");
+        for (i, tx) in block.txs.iter().enumerate() {
+            debug!("  tx[{}]: txid={}, payload={}, origin={}",
+                i, tx.txid(), tx.payload.name(), tx.origin_address());
+        }
 
         block
     }
@@ -2664,6 +2671,19 @@ impl BlockBuilder for FunaiBlockBuilder {
                 .find(|t| matches!(t.payload, TransactionPayload::Coinbase(..)))
                 .map(|coinbase_tx| extract_miner_addr(coinbase_tx, mainnet, evaluated_epoch))
         };
+
+        // Debug logging for state root mismatch diagnosis
+        if matches!(tx.payload, TransactionPayload::Infer { .. }) {
+            info!("Miner: try_mine_tx_with_len miner_address={:?}, evaluated_epoch={:?}, tx_id={}, coinbase_txid={}",
+                miner_address,
+                evaluated_epoch,
+                tx.txid(),
+                self.txs.iter()
+                    .find(|t| matches!(t.payload, TransactionPayload::Coinbase(..)))
+                    .map(|t| t.txid().to_string())
+                    .unwrap_or_default()
+            );
+        }
 
         let result = if !self.anchored_done {
             // building up the anchored blocks
