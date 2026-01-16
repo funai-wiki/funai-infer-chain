@@ -351,6 +351,11 @@ impl NakamotoSigners {
         Ok(SignerCalculation { events, reward_set })
     }
 
+    /// If this block is mined in the prepare phase, based on its tenure's `burn_tip_height`.  If
+    /// so, and if we haven't done so yet, then compute the PoX reward set, store it, and update
+    /// the .signers contract.  The stored PoX reward set is the reward set for the next reward
+    /// cycle, and will be used by the Nakamoto chains coordinator to validate its block-commits
+    /// and block signatures.
     pub fn check_and_handle_prepare_phase_start(
         clarity_tx: &mut ClarityTx,
         first_block_height: u64,
@@ -407,7 +412,7 @@ impl NakamotoSigners {
             let cycle_number = value.expect_u128()?;
             // if the cycle_number is less than `cycle_of_prepare_phase`, we need to update
             //  the .signers state.
-            Ok(cycle_number < cycle_of_prepare_phase.into())
+            Ok(cycle_number < u128::from(cycle_of_prepare_phase))
         });
 
         if !needs_update? {
@@ -428,13 +433,13 @@ impl NakamotoSigners {
             .as_free_transaction(|clarity| {
                 Self::handle_signer_funaidb_update(
                     clarity,
-                    &pox_constants,
+                    pox_constants,
                     cycle_of_prepare_phase,
                     active_pox_contract,
                     coinbase_height,
                 )
             })
-            .map(|calculation| Some(calculation))
+            .map(Some)
     }
 
     /// Make the contract name for a signers DB contract

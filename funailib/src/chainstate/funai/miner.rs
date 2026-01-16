@@ -1704,9 +1704,9 @@ impl FunaiBlockBuilder {
         );
         
         // Log transaction details for state root mismatch debugging
-        debug!("Miner: Transaction list in mined block:");
+        info!("Miner: Transaction list in mined block:");
         for (i, tx) in block.txs.iter().enumerate() {
-            debug!("  tx[{}]: txid={}, payload={}, origin={}",
+            info!("  tx[{}]: txid={}, payload={}, origin={}",
                 i, tx.txid(), tx.payload.name(), tx.origin_address());
         }
 

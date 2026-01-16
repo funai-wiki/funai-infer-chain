@@ -495,9 +495,16 @@ impl FunaiChainState {
         if cur_rewards.len() > 0 {
             let mut present = false;
             for rw in cur_rewards.iter() {
-                if (rw.is_parent() && reward.is_parent()) || (rw.is_child() && reward.is_child()) {
-                    // must insert a parent or a child at most once
-                    assert_eq!(rw, reward, "FATAL: tried to insert multiple distinct matured parent block reward records");
+                // Check if this is the same reward slot:
+                // - For parent rewards: both must be parent
+                // - For child rewards: both must be child AND have the same vtxindex
+                //   (vtxindex distinguishes miner reward from inference node rewards)
+                let same_slot = (rw.is_parent() && reward.is_parent()) 
+                    || (rw.is_child() && reward.is_child() && rw.vtxindex == reward.vtxindex);
+                
+                if same_slot {
+                    // must insert a parent or a child with the same vtxindex at most once
+                    assert_eq!(rw, reward, "FATAL: tried to insert multiple distinct matured block reward records for the same slot");
                     present = true;
                 }
             }

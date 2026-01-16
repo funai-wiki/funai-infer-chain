@@ -4697,29 +4697,33 @@ impl FunaiChainState {
         latest_matured_miners: &[MinerPaymentSchedule],
     ) -> Result<MinerPaymentSchedule, Error> {
         let parent_miner = if let Some(ref miner) = latest_matured_miners.first().as_ref() {
-            FunaiChainState::get_scheduled_block_rewards_at_block(
+            let rewards = FunaiChainState::get_scheduled_block_rewards_at_block(
                 conn,
                 &FunaiBlockHeader::make_index_block_hash(
                     &miner.parent_consensus_hash,
                     &miner.parent_block_hash,
                 ),
-            )?
-            .pop()
-            .unwrap_or_else(|| {
-                if miner.parent_consensus_hash == FIRST_BURNCHAIN_CONSENSUS_HASH
-                    && miner.parent_block_hash == FIRST_STACKS_BLOCK_HASH
-                {
-                    MinerPaymentSchedule::genesis(mainnet)
-                } else {
-                    panic!(
-                        "CORRUPTION: parent {}/{} of {}/{} not found in DB",
-                        &miner.parent_consensus_hash,
-                        &miner.parent_block_hash,
-                        &miner.consensus_hash,
-                        &miner.block_hash
-                    );
-                }
-            })
+            )?;
+            // Get the miner reward (vtxindex=0), not the inference node rewards (vtxindex>0)
+            // The rewards are sorted by vtxindex ASC, so the first one is the miner
+            rewards
+                .into_iter()
+                .find(|r| r.vtxindex == 0)
+                .unwrap_or_else(|| {
+                    if miner.parent_consensus_hash == FIRST_BURNCHAIN_CONSENSUS_HASH
+                        && miner.parent_block_hash == FIRST_STACKS_BLOCK_HASH
+                    {
+                        MinerPaymentSchedule::genesis(mainnet)
+                    } else {
+                        panic!(
+                            "CORRUPTION: parent {}/{} of {}/{} not found in DB",
+                            &miner.parent_consensus_hash,
+                            &miner.parent_block_hash,
+                            &miner.consensus_hash,
+                            &miner.block_hash
+                        );
+                    }
+                })
         } else {
             MinerPaymentSchedule::genesis(mainnet)
         };
@@ -5057,14 +5061,14 @@ impl FunaiChainState {
                 chain_tip,
             )?;
             
-            // Debug logging for state root mismatch diagnosis
-            debug!("setup_block: latest_matured_miners count={}, chain_tip_height={}, miner_id={:?}",
+            // Enhanced logging for state root mismatch diagnosis
+            info!("setup_block: latest_matured_miners count={}, chain_tip_height={}, miner_id={:?}",
                 latest_miners.len(),
                 chain_tip.funai_block_height,
                 miner_id_opt
             );
             for (i, miner_schedule) in latest_miners.iter().enumerate() {
-                debug!("  matured_miner[{}]: recipient={}, coinbase={}, vtxindex={}, block_hash={}",
+                info!("  matured_miner[{}]: recipient={}, coinbase={}, vtxindex={}, block_hash={}",
                     i,
                     miner_schedule.recipient,
                     miner_schedule.coinbase,
@@ -5334,20 +5338,20 @@ impl FunaiChainState {
         block_height: u32,
         mblock_pubkey_hash: Hash160,
     ) -> Result<Vec<FunaiTransactionEvent>, Error> {
-        // Debug logging for state root mismatch diagnosis
-        debug!("finish_block: block_height={}, has_miner_payouts={}",
+        // Enhanced logging for state root mismatch diagnosis
+        info!("finish_block: block_height={}, has_miner_payouts={}",
             block_height,
             miner_payouts.is_some()
         );
         
         // add miner payments
         if let Some((ref miner_reward, ref user_rewards, ref parent_reward, ref reward_info)) = miner_payouts {
-            debug!("finish_block: miner_reward.total()={}, user_rewards.len()={}, parent_reward.total()={}",
+            info!("finish_block: miner_reward.total()={}, user_rewards.len()={}, parent_reward.total()={}",
                 miner_reward.total(),
                 user_rewards.len(),
                 parent_reward.total()
             );
-            debug!("finish_block: reward_info: from_block={}, from_parent={}",
+            info!("finish_block: reward_info: from_block={}, from_parent={}",
                 reward_info.from_funai_block_hash,
                 reward_info.from_parent_funai_block_hash
             );
@@ -5360,7 +5364,7 @@ impl FunaiChainState {
                 parent_reward,
             )?;
             
-            debug!("finish_block: matured_ustx={}", matured_ustx);
+            info!("finish_block: matured_ustx={}", matured_ustx);
             clarity_tx.increment_ustx_liquid_supply(matured_ustx);
         }
 
@@ -5716,12 +5720,15 @@ impl FunaiChainState {
             // obtain reward info for receipt -- consolidate miner, user, and parent rewards into a
             // single list, but keep the miner/user/parent/info tuple for advancing the chain tip
             let (matured_rewards, miner_payouts_opt) =
-                if let Some((miner_reward, mut user_rewards, parent_reward, reward_ptr)) =
+                if let Some((miner_reward, user_rewards, parent_reward, reward_ptr)) =
                     matured_miner_rewards_opt
                 {
+                    // Build the matured_rewards list by cloning, NOT moving user_rewards
                     let mut ret = vec![];
                     ret.push(miner_reward.clone());
-                    ret.append(&mut user_rewards);
+                    for reward in user_rewards.iter() {
+                        ret.push(reward.clone());
+                    }
                     ret.push(parent_reward.clone());
                     (
                         ret,
