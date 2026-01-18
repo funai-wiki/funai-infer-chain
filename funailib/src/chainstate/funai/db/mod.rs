@@ -294,16 +294,17 @@ impl DBConfig {
                     || self.version == "2"
                     || self.version == "3"
                     || self.version == "4"
+                    || self.version == "5"
             }
             FunaiEpochId::Epoch2_05 => {
-                self.version == "2" || self.version == "3" || self.version == "4"
+                self.version == "2" || self.version == "3" || self.version == "4" || self.version == "5"
             }
-            FunaiEpochId::Epoch21 => self.version == "3" || self.version == "4",
-            FunaiEpochId::Epoch22 => self.version == "3" || self.version == "4",
-            FunaiEpochId::Epoch23 => self.version == "3" || self.version == "4",
-            FunaiEpochId::Epoch24 => self.version == "3" || self.version == "4",
-            FunaiEpochId::Epoch25 => self.version == "3" || self.version == "4",
-            FunaiEpochId::Epoch30 => self.version == "3" || self.version == "4",
+            FunaiEpochId::Epoch21 => self.version == "3" || self.version == "4" || self.version == "5",
+            FunaiEpochId::Epoch22 => self.version == "3" || self.version == "4" || self.version == "5",
+            FunaiEpochId::Epoch23 => self.version == "3" || self.version == "4" || self.version == "5",
+            FunaiEpochId::Epoch24 => self.version == "3" || self.version == "4" || self.version == "5",
+            FunaiEpochId::Epoch25 => self.version == "3" || self.version == "4" || self.version == "5",
+            FunaiEpochId::Epoch30 => self.version == "3" || self.version == "4" || self.version == "5",
         }
     }
 }
