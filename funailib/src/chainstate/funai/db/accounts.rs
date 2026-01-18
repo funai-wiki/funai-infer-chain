@@ -524,9 +524,11 @@ impl FunaiChainState {
             tx_fees_streamed_confirmed,
             tx_fees_streamed_produced,
             parent_index_block_hash,
-            child_index_block_hash
-        ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)";
+            child_index_block_hash,
+            is_parent
+        ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)";
 
+        let is_parent_val: i32 = if reward.is_parent() { 1 } else { 0 };
         let args: &[&dyn ToSql] = &[
             &reward.address.to_string(),
             &reward.recipient.to_string(),
@@ -537,6 +539,7 @@ impl FunaiChainState {
             &reward.tx_fees_streamed_produced.to_string(),
             parent_block_id,
             child_block_id,
+            &is_parent_val,
         ];
 
         tx.execute(sql, args)

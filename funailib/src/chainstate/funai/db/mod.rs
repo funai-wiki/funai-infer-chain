@@ -668,7 +668,7 @@ impl<'a> DerefMut for ChainstateTx<'a> {
     }
 }
 
-pub const CHAINSTATE_VERSION: &'static str = "4";
+pub const CHAINSTATE_VERSION: &'static str = "5";
 
 const CHAINSTATE_INITIAL_SCHEMA: &'static [&'static str] = &[
     "PRAGMA foreign_keys = ON;",
@@ -837,9 +837,13 @@ const CHAINSTATE_SCHEMA_3: &'static [&'static str] = &[
         -- fork identifier 
         child_index_block_hash TEXT NOT NULL,
         parent_index_block_hash TEXT NOT NULL,
+        
+        -- 1 if this is a parent reward (streamed fees only), 0 if child reward (coinbase + fees)
+        is_parent INTEGER NOT NULL DEFAULT 0,
 
-        -- there are two rewards records per (parent,child) pair. One will have a non-zero coinbase; the other will have a 0 coinbase.
-        PRIMARY KEY(parent_index_block_hash,child_index_block_hash,coinbase)
+        -- vtxindex uniquely identifies the reward recipient: 0 for miner, 1+ for inference nodes
+        -- is_parent distinguishes parent (streamed fees) from child (coinbase) rewards for same vtxindex
+        PRIMARY KEY(parent_index_block_hash,child_index_block_hash,vtxindex,is_parent)
     );"#,
     r#"
     -- Add a `recipient` column so that in Funai 2.1, the block reward can be sent to someone besides the miner (e.g. a contract).
@@ -862,6 +866,53 @@ const CHAINSTATE_SCHEMA_3: &'static [&'static str] = &[
     );"#,
     r#"
     UPDATE db_config SET version = "3";
+    "#,
+];
+
+// Fix for UNIQUE constraint violation when multiple inference nodes receive the same reward amount.
+// The PRIMARY KEY was (parent_index_block_hash, child_index_block_hash, coinbase) which conflicts
+// when two inference nodes get the same coinbase value.
+// 
+// We need to use vtxindex to distinguish between different reward recipients, but we also need
+// to distinguish between parent and child rewards for the same vtxindex (e.g., miner has both
+// a parent reward and a child reward with vtxindex=0).
+//
+// Solution: Add an is_parent column and use PRIMARY KEY (parent_index_block_hash, child_index_block_hash, vtxindex, is_parent)
+const CHAINSTATE_SCHEMA_5: &'static [&'static str] = &[
+    r#"
+    -- Create new table with correct PRIMARY KEY using vtxindex and is_parent
+    CREATE TABLE matured_rewards_new(
+        address TEXT NOT NULL,
+        recipient TEXT,
+        vtxindex INTEGER NOT NULL,
+        coinbase TEXT NOT NULL,
+        tx_fees_anchored TEXT NOT NULL,
+        tx_fees_streamed_confirmed TEXT NOT NULL,
+        tx_fees_streamed_produced TEXT NOT NULL,
+        child_index_block_hash TEXT NOT NULL,
+        parent_index_block_hash TEXT NOT NULL,
+        is_parent INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY(parent_index_block_hash,child_index_block_hash,vtxindex,is_parent)
+    );"#,
+    r#"
+    -- Copy data from old table, deriving is_parent from coinbase (parent rewards have coinbase=0)
+    INSERT INTO matured_rewards_new 
+        SELECT address, recipient, vtxindex, coinbase, tx_fees_anchored, 
+               tx_fees_streamed_confirmed, tx_fees_streamed_produced,
+               child_index_block_hash, parent_index_block_hash,
+               CASE WHEN CAST(coinbase AS INTEGER) = 0 THEN 1 ELSE 0 END as is_parent
+        FROM matured_rewards;"#,
+    r#"
+    -- Drop old table
+    DROP TABLE matured_rewards;"#,
+    r#"
+    -- Rename new table to original name
+    ALTER TABLE matured_rewards_new RENAME TO matured_rewards;"#,
+    r#"
+    -- Recreate the index
+    CREATE INDEX IF NOT EXISTS index_matured_rewards_by_vtxindex ON matured_rewards(parent_index_block_hash,child_index_block_hash,vtxindex);"#,
+    r#"
+    UPDATE db_config SET version = "5";
     "#,
 ];
 
@@ -1076,6 +1127,13 @@ impl FunaiChainState {
                         // migrate to nakamoto 1
                         info!("Migrating chainstate schema from version 3 to 4: nakamoto support");
                         for cmd in NAKAMOTO_CHAINSTATE_SCHEMA_1.iter() {
+                            tx.execute_batch(cmd)?;
+                        }
+                    }
+                    "4" => {
+                        // migrate to 5: fix matured_rewards PRIMARY KEY to use vtxindex instead of coinbase
+                        info!("Migrating chainstate schema from version 4 to 5: fix matured_rewards primary key");
+                        for cmd in CHAINSTATE_SCHEMA_5.iter() {
                             tx.execute_batch(cmd)?;
                         }
                     }
