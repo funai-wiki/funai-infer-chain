@@ -36,7 +36,7 @@ use funai::chainstate::funai::{
     TransactionVersion, C32_ADDRESS_VERSION_TESTNET_SINGLESIG,
 };
 use funai::core::{FunaiEpoch, FunaiEpochExtension, FunaiEpochId, CHAIN_ID_TESTNET};
-use funai::util_lib::strings::FunaiString;
+use funai::util_lib::strings::{FunaiString, InferLPString};
 use funai_common::address::AddressHashMode;
 use funai_common::codec::FunaiMessageCodec;
 use funai_common::types::chainstate::{BlockHeaderHash, FunaiAddress};
@@ -58,6 +58,7 @@ mod epoch_22;
 mod epoch_23;
 mod epoch_24;
 mod epoch_25;
+mod infer_tests;
 mod integrations;
 mod mempool;
 pub mod nakamoto_integrations;
@@ -370,6 +371,82 @@ pub fn make_poison(
 pub fn make_coinbase(sender: &FunaiPrivateKey, nonce: u64, tx_fee: u64) -> Vec<u8> {
     let payload = TransactionPayload::Coinbase(CoinbasePayload([0; 32]), None, None);
     serialize_sign_standard_single_sig_tx(payload.into(), sender, nonce, tx_fee)
+}
+
+/// Create an inference transaction with a valid output hash (simulating success)
+pub fn make_infer_tx(
+    sender: &FunaiPrivateKey,
+    nonce: u64,
+    tx_fee: u64,
+    amount: u64,
+    user_input: &str,
+    context: &str,
+    node_principal: &PrincipalData,
+    model_name: &str,
+    output_hash: &str,  // Non-empty for success, empty for failure
+) -> Vec<u8> {
+    let sender_addr = to_addr(sender);
+    let payload = TransactionPayload::Infer(
+        PrincipalData::Standard(sender_addr.into()),
+        amount,
+        InferLPString::from_str(user_input).unwrap(),
+        InferLPString::from_str(context).unwrap(),
+        node_principal.clone(),
+        InferLPString::from_str(model_name).unwrap(),
+        InferLPString::from_str(output_hash).unwrap(),
+    );
+    serialize_sign_standard_single_sig_tx(payload.into(), sender, nonce, tx_fee)
+}
+
+/// Create an inference transaction that will FAIL (empty output_hash)
+pub fn make_failing_infer_tx(
+    sender: &FunaiPrivateKey,
+    nonce: u64,
+    tx_fee: u64,
+    amount: u64,
+    user_input: &str,
+    context: &str,
+    node_principal: &PrincipalData,
+    model_name: &str,
+) -> Vec<u8> {
+    // Empty output_hash causes the inference to fail
+    make_infer_tx(
+        sender,
+        nonce,
+        tx_fee,
+        amount,
+        user_input,
+        context,
+        node_principal,
+        model_name,
+        "",  // Empty output hash = failure
+    )
+}
+
+/// Create an inference transaction that will SUCCEED (with a valid output hash)
+pub fn make_successful_infer_tx(
+    sender: &FunaiPrivateKey,
+    nonce: u64,
+    tx_fee: u64,
+    amount: u64,
+    user_input: &str,
+    context: &str,
+    node_principal: &PrincipalData,
+    model_name: &str,
+) -> Vec<u8> {
+    // Use a dummy valid hex hash for success
+    let dummy_output_hash = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
+    make_infer_tx(
+        sender,
+        nonce,
+        tx_fee,
+        amount,
+        user_input,
+        context,
+        node_principal,
+        model_name,
+        dummy_output_hash,
+    )
 }
 
 pub fn make_contract_call(
