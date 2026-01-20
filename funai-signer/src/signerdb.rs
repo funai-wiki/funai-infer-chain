@@ -227,6 +227,8 @@ where
         .map_err(DBError::SerializationError)
 }
 
+/// Create a test signer database at the specified path.
+/// This is only available in test builds.
 #[cfg(test)]
 pub fn test_signer_db(db_path: &str) -> SignerDb {
     use std::fs;
@@ -383,6 +385,7 @@ mod tests {
         let vote = NakamotoBlockVote {
             signer_signature_hash: Sha512Trunc256Sum([0x01; 32]),
             rejected: false,
+            invalid_transactions: None,
         };
         block_info.vote = Some(vote.clone());
         db.insert_block(reward_cycle, &block_info)

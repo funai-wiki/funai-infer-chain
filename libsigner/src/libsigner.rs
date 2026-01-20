@@ -51,6 +51,7 @@ pub use crate::events::{
 };
 pub use crate::messages::{
     BlockRejection, BlockResponse, MessageSlotID, RejectCode, SignerMessage,
+    SignerEndpointAnnouncement,
 };
 pub use crate::runloop::{RunningSigner, Signer, SignerRunLoop};
 pub use crate::session::{SignerSession, FunaiDBSession};

@@ -34,8 +34,9 @@ use funailib::net::api::postblock_proposal::{BlockValidateResponse, ValidateReje
 use hashbrown::HashSet;
 use libsigner::{
     BlockProposalSigners, BlockRejection, BlockResponse, MessageSlotID, RejectCode, SignerEvent,
-    SignerMessage,
+    SignerMessage, SignerEndpointAnnouncement,
 };
+use funai_common::util::secp256k1::Secp256k1PublicKey;
 use serde_derive::{Deserialize, Serialize};
 use slog::{slog_debug, slog_error, slog_info, slog_warn};
 use tokio::runtime::Runtime;
@@ -189,6 +190,12 @@ pub struct Signer {
     pub funai_private_key: funai_common::types::chainstate::FunaiPrivateKey,
     /// Channel to send inference tasks to the inference service
     pub inference_task_sender: Option<TokioSender<SignerEvent>>,
+    /// This signer's HTTP endpoint URL for API requests
+    pub signer_endpoint: Option<String>,
+    /// Whether endpoint has been broadcasted
+    pub endpoint_broadcasted: bool,
+    /// Registry of other signers' endpoints (discovered via funaiDB)
+    pub signer_registry: crate::encryption::SignerRegistry,
 }
 
 impl std::fmt::Display for Signer {
@@ -323,6 +330,9 @@ impl From<SignerConfig> for Signer {
             support_models: signer_config.support_models,
             funai_private_key: signer_config.funai_private_key,
             inference_task_sender: None,
+            signer_endpoint: None,
+            endpoint_broadcasted: false,
+            signer_registry: crate::encryption::SignerRegistry::new(),
         }
     }
 }
@@ -695,6 +705,11 @@ impl Signer {
                 SignerMessage::DkgResults { .. }
                 | SignerMessage::BlockResponse(_)
                 | SignerMessage::Transactions(_) => None,
+                SignerMessage::EndpointAnnouncement(announcement) => {
+                    // Process endpoint announcement from other signers
+                    self.handle_endpoint_announcement(announcement);
+                    None
+                }
                 // TODO: if a signer tries to trigger DKG and we already have one set in the contract, ignore the request.
                 SignerMessage::Packet(packet) => {
                     self.verify_packet(funai_client, packet.clone(), coordinator_pubkey)
@@ -1440,6 +1455,98 @@ impl Signer {
         self.funaidb.send_message_with_retry(signer_message)?;
         info!("{self}: Broadcasted DKG vote transaction ({txid}) to funai DB");
         Ok(())
+    }
+
+    /// Set this signer's endpoint URL
+    pub fn set_endpoint(&mut self, endpoint: String) {
+        self.signer_endpoint = Some(endpoint);
+        self.endpoint_broadcasted = false;
+    }
+
+    /// Handle an endpoint announcement from another signer
+    fn handle_endpoint_announcement(&mut self, announcement: &SignerEndpointAnnouncement) {
+        debug!(
+            "{self}: Received endpoint announcement from signer: public_key={}, endpoint={}, principal={}",
+            announcement.public_key, announcement.endpoint, announcement.principal
+        );
+
+        // Register the signer's endpoint in our local registry
+        let signer_info = crate::encryption::SignerInfo {
+            public_key: announcement.public_key.clone(),
+            endpoint: announcement.endpoint.clone(),
+            principal: announcement.principal.clone(),
+            last_seen: announcement.timestamp,
+        };
+
+        self.signer_registry.register(signer_info);
+        info!(
+            "{self}: Registered signer endpoint: {} -> {}",
+            announcement.public_key, announcement.endpoint
+        );
+    }
+
+    /// Get the endpoint URL for a signer by their public key
+    pub fn get_signer_endpoint(&self, public_key: &str) -> Option<String> {
+        self.signer_registry.get_endpoint(public_key)
+    }
+
+    /// Get all registered signer endpoints
+    pub fn get_all_signer_endpoints(&self) -> Vec<&crate::encryption::SignerInfo> {
+        self.signer_registry.get_all()
+    }
+
+    /// Broadcast this signer's endpoint to other signers via funaiDB
+    /// This allows other signers to discover this signer's API endpoint for decryption requests
+    pub fn broadcast_endpoint(&mut self) -> Result<(), ClientError> {
+        if self.endpoint_broadcasted {
+            debug!("{self}: Endpoint already broadcasted, skipping");
+            return Ok(());
+        }
+
+        let endpoint = match &self.signer_endpoint {
+            Some(e) => e.clone(),
+            None => {
+                debug!("{self}: No endpoint configured, skipping broadcast");
+                return Ok(());
+            }
+        };
+
+        // Get signer's public key
+        let public_key = Secp256k1PublicKey::from_private(&self.funai_private_key);
+        let public_key_hex = funai_common::util::hash::to_hex(&public_key.to_bytes_compressed());
+
+        // Get signer's principal address
+        let signer_address = FunaiAddress::p2pkh(self.mainnet, &public_key);
+        let principal = signer_address.to_string();
+
+        // Create announcement message
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let announcement = SignerEndpointAnnouncement {
+            public_key: public_key_hex.clone(),
+            endpoint: endpoint.clone(),
+            principal: principal.clone(),
+            timestamp,
+        };
+
+        let message = SignerMessage::EndpointAnnouncement(announcement);
+        
+        match self.funaidb.send_message_with_retry(message) {
+            Ok(ack) => {
+                info!("{self}: Broadcasted endpoint announcement to funaiDB: endpoint={}, public_key={}", 
+                    endpoint, public_key_hex);
+                debug!("{self}: Endpoint broadcast ACK: {:?}", ack);
+                self.endpoint_broadcasted = true;
+                Ok(())
+            }
+            Err(e) => {
+                error!("{self}: Failed to broadcast endpoint to funaiDB: {:?}", e);
+                Err(e)
+            }
+        }
     }
 
     /// Process a signature from a signing round by deserializing the signature and

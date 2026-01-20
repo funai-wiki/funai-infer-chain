@@ -28,6 +28,8 @@ pub mod client;
 pub mod config;
 /// The coordinator selector for the signer
 pub mod coordinator;
+/// The encryption module for inference request input data
+pub mod encryption;
 /// The inference service for managing AI inference tasks
 pub mod inference_service;
 /// The inference API server for handling HTTP requests

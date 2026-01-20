@@ -90,10 +90,15 @@ pub struct InferTask {
     pub task_id: String,
     /// User address
     pub user_address: String,
-    /// User input
+    /// User input (plaintext - only accessible to the original Signer)
     pub user_input: String,
+    /// Encrypted user input (JSON-encoded EncryptedData)
+    /// This is what gets stored and transmitted
+    pub encrypted_user_input: Option<String>,
     /// Context information
     pub context: String,
+    /// Encrypted context (JSON-encoded EncryptedData)
+    pub encrypted_context: Option<String>,
     /// Transaction fee
     pub fee: u64,
     /// Nonce
@@ -114,6 +119,10 @@ pub struct InferTask {
     pub updated_at: u64,
     /// Inference result (if completed)
     pub result: Option<InferTaskResult>,
+    /// The signer's public key that encrypted this task
+    pub signer_public_key: Option<String>,
+    /// Whether this task's input is encrypted
+    pub is_encrypted: bool,
 }
 
 impl InferTask {
@@ -139,7 +148,9 @@ impl InferTask {
             task_id,
             user_address,
             user_input,
+            encrypted_user_input: None,
             context,
+            encrypted_context: None,
             fee,
             nonce,
             infer_fee,
@@ -150,6 +161,51 @@ impl InferTask {
             created_at: now,
             updated_at: now,
             result: None,
+            signer_public_key: None,
+            is_encrypted: false,
+        }
+    }
+
+    /// Create a new encrypted inference task
+    pub fn new_encrypted(
+        task_id: String,
+        user_address: String,
+        user_input: String,
+        encrypted_user_input: String,
+        context: String,
+        encrypted_context: String,
+        fee: u64,
+        nonce: u64,
+        infer_fee: u64,
+        max_infer_time: u64,
+        model_type: InferModelType,
+        signed_tx: Option<String>,
+        signer_public_key: String,
+    ) -> Self {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        Self {
+            task_id,
+            user_address,
+            user_input,
+            encrypted_user_input: Some(encrypted_user_input),
+            context,
+            encrypted_context: Some(encrypted_context),
+            fee,
+            nonce,
+            infer_fee,
+            max_infer_time,
+            model_type,
+            signed_tx,
+            status: InferTaskStatus::Pending,
+            created_at: now,
+            updated_at: now,
+            result: None,
+            signer_public_key: Some(signer_public_key),
+            is_encrypted: true,
         }
     }
 
@@ -392,7 +448,9 @@ impl InferenceDatabase {
                 task_id,
                 user_address,
                 user_input,
+                encrypted_user_input: None,
                 context,
+                encrypted_context: None,
                 fee: fee as u64,
                 nonce: nonce as u64,
                 infer_fee: infer_fee as u64,
@@ -403,6 +461,8 @@ impl InferenceDatabase {
                 created_at: created_at as u64,
                 updated_at: updated_at as u64,
                 result,
+                signer_public_key: None,
+                is_encrypted: false,
             }))
         } else {
             Ok(None)
@@ -528,7 +588,9 @@ impl InferenceDatabase {
                 task_id,
                 user_address,
                 user_input,
+                encrypted_user_input: None,
                 context,
+                encrypted_context: None,
                 fee: fee as u64,
                 nonce: nonce as u64,
                 infer_fee: infer_fee as u64,
@@ -539,6 +601,8 @@ impl InferenceDatabase {
                 created_at: created_at as u64,
                 updated_at: updated_at as u64,
                 result,
+                signer_public_key: None,
+                is_encrypted: false,
             });
         }
 
@@ -559,6 +623,12 @@ pub struct InferenceServiceState {
     pub inference_nodes: Arc<Mutex<HashMap<String, InferenceNode>>>,
     /// Database connection
     pub database: Arc<Mutex<InferenceDatabase>>,
+    /// Signer's private key for encryption/decryption (optional, set from config)
+    pub signer_private_key: Option<funai_common::types::chainstate::FunaiPrivateKey>,
+    /// Signer's public key in hex format
+    pub signer_public_key_hex: Option<String>,
+    /// Signer's address
+    pub signer_address: Option<String>,
 }
 
 impl InferenceServiceState {
@@ -574,6 +644,9 @@ impl InferenceServiceState {
             completed_tasks: Arc::new(Mutex::new(HashMap::new())),
             inference_nodes: Arc::new(Mutex::new(HashMap::new())),
             database,
+            signer_private_key: None,
+            signer_public_key_hex: None,
+            signer_address: None,
         };
 
         // Load data from database
@@ -582,6 +655,76 @@ impl InferenceServiceState {
         }
 
         state
+    }
+
+    /// Set the signer's private key for encryption/decryption
+    pub fn set_signer_key(&mut self, private_key: funai_common::types::chainstate::FunaiPrivateKey, signer_address: String) {
+        use funai_common::util::secp256k1::Secp256k1PublicKey;
+        use funai_common::util::hash::to_hex;
+        
+        let public_key = Secp256k1PublicKey::from_private(&private_key);
+        let pub_hex = to_hex(&public_key.to_bytes_compressed());
+        
+        self.signer_private_key = Some(private_key);
+        self.signer_public_key_hex = Some(pub_hex);
+        self.signer_address = Some(signer_address);
+    }
+
+    /// Get the signer's public key for encryption
+    pub fn get_encryption_public_key(&self) -> (String, String) {
+        (
+            self.signer_public_key_hex.clone().unwrap_or_default(),
+            self.signer_address.clone().unwrap_or_default(),
+        )
+    }
+
+    /// Decrypt task input for authorized requesters
+    /// Returns (user_input, context) on success
+    pub fn decrypt_task_input(
+        &self,
+        task_id: &str,
+        requester_public_key: &str,
+        signature: &str,
+        requester_type: &str,
+    ) -> Result<(String, String), String> {
+        // Find the task
+        let task = self.get_task_status(task_id)
+            .ok_or_else(|| format!("Task {} not found", task_id))?;
+
+        // Check if the task is encrypted
+        if !task.is_encrypted {
+            // Not encrypted, return plaintext directly
+            return Ok((task.user_input.clone(), task.context.clone()));
+        }
+
+        // Verify the requester is authorized
+        // For now, we allow:
+        // 1. Registered inference nodes (requester_type == "infer_node")
+        // 2. Other signers (requester_type == "signer")
+        
+        match requester_type {
+            "infer_node" => {
+                // Check if the node is registered
+                let nodes = self.inference_nodes.lock().map_err(|e| e.to_string())?;
+                let is_registered = nodes.values().any(|n| n.public_key == requester_public_key);
+                if !is_registered {
+                    return Err("Requester node is not registered".to_string());
+                }
+            }
+            "signer" => {
+                // TODO: Verify the signer is in the current reward cycle's signer set
+                // For now, we trust all signer requests
+            }
+            _ => {
+                return Err(format!("Unknown requester type: {}", requester_type));
+            }
+        }
+
+        // TODO: Verify the signature to prove the requester controls the claimed public key
+        // For now, we skip signature verification
+
+        // Return the plaintext input (the Signer has it stored)
+        Ok((task.user_input.clone(), task.context.clone()))
     }
 
     /// Load data from database into memory

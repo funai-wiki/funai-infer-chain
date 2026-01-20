@@ -78,3 +78,9 @@ features = ["serde"]
 
 [dependencies.hex]
 version = "0.4"
+
+[dependencies.aes-gcm]
+version = "0.10"
+
+[dependencies.sha2]
+version = "0.10"

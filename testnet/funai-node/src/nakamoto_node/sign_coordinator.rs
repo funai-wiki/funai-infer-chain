@@ -266,7 +266,8 @@ impl SignCoordinator {
                 .filter_map(|msg| {
                     match msg {
                         SignerMessage::DkgResults { .. }
-                        | SignerMessage::Transactions(_) => None,
+                        | SignerMessage::Transactions(_)
+                        | SignerMessage::EndpointAnnouncement(_) => None,
                         SignerMessage::BlockResponse(BlockResponse::Filter(filter)) => {
                             warn!("Signers requested selective transaction removal (FILTER): {:?}", filter.invalid_transactions);
                             collected_filters.insert(filter.invalid_transactions);

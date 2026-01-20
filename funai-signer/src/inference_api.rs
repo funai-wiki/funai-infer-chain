@@ -32,12 +32,15 @@ use crate::inference_service::{
 use serde_json::json;
 use funailib::chainstate::funai::{
     FunaiTransaction, TransactionPayload, TransactionVersion, FunaiPublicKey,
+    C32_ADDRESS_VERSION_MAINNET_SINGLESIG, C32_ADDRESS_VERSION_TESTNET_SINGLESIG,
 };
+use funai_common::address::AddressHashMode;
 use funai_common::types::chainstate::FunaiAddress;
 use funai_common::util::hash::hex_bytes;
 use funai_common::codec::FunaiMessageCodec;
 use std::io::Cursor;
 use clarity::vm::types::{PrincipalData, FunaiAddressExtensions};
+use sha2::{Sha256, Digest};
 
 /// Generic API response wrapper
 #[derive(Serialize, Deserialize)]
@@ -118,6 +121,43 @@ pub struct NodeStatusResponse {
     pub status: String,
 }
 
+/// Request to decrypt inference input (from Infer Node or other Signers)
+#[derive(Serialize, Deserialize)]
+pub struct DecryptInputRequest {
+    /// Task ID for which decryption is requested
+    pub task_id: String,
+    /// The requester's public key (for verification)
+    pub requester_public_key: String,
+    /// Signature of task_id by the requester (proves they control the key)
+    pub signature: String,
+    /// Requester type: "infer_node" or "signer"
+    pub requester_type: String,
+}
+
+/// Response for decrypt input request
+#[derive(Serialize, Deserialize)]
+pub struct DecryptInputResponse {
+    /// Task ID
+    pub task_id: String,
+    /// Decrypted user input (only provided if authorized)
+    pub user_input: Option<String>,
+    /// Decrypted context (only provided if authorized)
+    pub context: Option<String>,
+    /// Whether the request was successful
+    pub success: bool,
+    /// Error message if failed
+    pub error: Option<String>,
+}
+
+/// Response containing the signer's public key for encryption
+#[derive(Serialize, Deserialize)]
+pub struct SignerPublicKeyResponse {
+    /// The signer's public key in hex format
+    pub public_key: String,
+    /// The signer's address
+    pub signer_address: String,
+}
+
 /// Inference result response
 #[derive(Serialize, Deserialize)]
 pub struct InferenceResultResponse {
@@ -150,6 +190,36 @@ pub struct TaskStatusResponse {
     pub created_at: u64,
     /// Task status
     pub status: String,
+    /// Inference result (if completed)
+    pub result: Option<TaskResultData>,
+}
+
+/// Task result data (returned when task is completed)
+#[derive(Serialize, Deserialize)]
+pub struct TaskResultData {
+    /// Inference output
+    pub output: String,
+    /// Inference confidence
+    pub confidence: f64,
+    /// Completion time
+    pub completed_at: u64,
+    /// Inference node ID
+    pub inference_node_id: String,
+}
+
+/// Authenticated task status query request
+#[derive(Serialize, Deserialize)]
+pub struct AuthenticatedTaskStatusRequest {
+    /// Task ID to query
+    pub task_id: String,
+    /// User's public key (hex-encoded, compressed format)
+    pub public_key: String,
+    /// Signature of the message: "query_task:{task_id}:{timestamp}"
+    /// This proves the requester controls the private key corresponding to user_address
+    pub signature: String,
+    /// Unix timestamp (in seconds) when signature was created
+    /// Request is valid for 5 minutes from this timestamp
+    pub timestamp: u64,
 }
 
 /// Heartbeat request from inference node
@@ -266,10 +336,15 @@ impl InferenceApiServer {
             (&Method::POST, "/api/v1/tasks/complete") => {
                 self.handle_complete_task(req).await
             }
-            // Miner fetch completed task status
-            (&Method::GET, path) if path.starts_with("/api/v1/tasks/") && path.contains("/status") => {
+            // User query task status (authenticated - POST with signature)
+            (&Method::POST, "/api/v1/tasks/status") => {
+                self.handle_authenticated_task_status(req).await
+            }
+            // Internal task status query (for Miner/internal use only - no auth)
+            // Note: In production, this should be restricted to internal IPs or removed
+            (&Method::GET, path) if path.starts_with("/api/v1/internal/tasks/") && path.contains("/status") => {
                 let task_id = self.extract_task_id_from_path(path);
-                self.handle_get_task_status(task_id).await
+                self.handle_get_task_status_internal(task_id).await
             }
             // Get service statistics
             (&Method::GET, "/api/v1/stats") => {
@@ -278,6 +353,14 @@ impl InferenceApiServer {
             // Get all node statuses
             (&Method::GET, "/api/v1/nodes") => {
                 self.handle_get_nodes().await
+            }
+            // Get signer's public key for encryption
+            (&Method::GET, "/api/v1/encryption/public-key") => {
+                self.handle_get_public_key().await
+            }
+            // Request decryption of inference input (for Infer Nodes and other Signers)
+            (&Method::POST, "/api/v1/encryption/decrypt") => {
+                self.handle_decrypt_input(req).await
             }
             // Health check
             (&Method::GET, "/health") => {
@@ -632,9 +715,53 @@ impl InferenceApiServer {
                     None
                 };
 
+                // For registered Infer Nodes, decrypt the input directly
+                // No need for a separate decryption request
+                let decrypted_user_input = if task.is_encrypted {
+                    // Task is encrypted, need to decrypt
+                    if let Some(ref encrypted_input) = task.encrypted_user_input {
+                        match crate::encryption::EncryptedData::from_json(encrypted_input) {
+                            Ok(encrypted_data) => {
+                                // Get signer's private key to decrypt
+                                let signer_key = {
+                                    let service = self.shared_state.lock().unwrap();
+                                    service.signer_private_key.clone()
+                                };
+                                
+                                match signer_key {
+                                    Some(key) => {
+                                        match crate::encryption::InferenceEncryption::decrypt(&encrypted_data, &key) {
+                                            Ok(plaintext) => plaintext,
+                                            Err(e) => {
+                                                error!("Failed to decrypt task input: {}", e);
+                                                // Fallback to stored user_input
+                                                task.user_input.clone()
+                                            }
+                                        }
+                                    }
+                                    None => {
+                                        warn!("Signer key not set, returning stored user_input");
+                                        task.user_input.clone()
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                error!("Failed to parse encrypted data: {}", e);
+                                task.user_input.clone()
+                            }
+                        }
+                    } else {
+                        // Encrypted flag is true but no encrypted data, use plain text
+                        task.user_input.clone()
+                    }
+                } else {
+                    // Task is not encrypted, use plain text directly
+                    task.user_input.clone()
+                };
+
                 let response = GetTaskResponse {
                     task_id: task.task_id,
-                    user_input: task.user_input,
+                    user_input: decrypted_user_input, // Return decrypted plaintext
                     context: task.context,
                     model_name: format!("{:?}", task.model_type),
                     max_infer_time: task.max_infer_time,
@@ -642,7 +769,8 @@ impl InferenceApiServer {
                     signed_tx: signed_tx,
                 };
                 
-                info!("Assigned task {} to node {}", response.task_id, node_id);
+                info!("Assigned task {} to node {} (input decrypted: {})", 
+                    response.task_id, node_id, task.is_encrypted);
                 self.json_response(ApiResponse::success(response), StatusCode::OK)
             }
             None => {
@@ -692,8 +820,207 @@ impl InferenceApiServer {
         }
     }
 
-    /// Handle get task status
-    async fn handle_get_task_status(&self, task_id: Option<String>) -> Response<Body> {
+    /// Handle authenticated task status query (for users)
+    /// Requires signature proof that the requester owns the user_address
+    async fn handle_authenticated_task_status(&self, req: Request<Body>) -> Response<Body> {
+        let auth_request: AuthenticatedTaskStatusRequest = match self.parse_json_body(req).await {
+            Ok(r) => r,
+            Err(e) => {
+                error!("Failed to parse authenticated task status request: {}", e);
+                return self.json_response(
+                    ApiResponse::<String>::error(format!("Invalid request format: {}", e)),
+                    StatusCode::BAD_REQUEST,
+                );
+            }
+        };
+
+        // Validate timestamp (request must be within 5 minutes)
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        
+        let time_diff = if now > auth_request.timestamp {
+            now - auth_request.timestamp
+        } else {
+            auth_request.timestamp - now
+        };
+        
+        if time_diff > 300 {
+            warn!("Task status request expired: timestamp {} vs now {}", auth_request.timestamp, now);
+            return self.json_response(
+                ApiResponse::<String>::error("Request expired. Timestamp must be within 5 minutes.".to_string()),
+                StatusCode::UNAUTHORIZED,
+            );
+        }
+
+        // Get the task first to check if it exists and get the user_address
+        let task = {
+            let service = self.shared_state.lock().unwrap();
+            service.get_task_status(&auth_request.task_id)
+        };
+
+        let task = match task {
+            Some(t) => t,
+            None => {
+                warn!("Task {} not found", auth_request.task_id);
+                return self.json_response(
+                    ApiResponse::<String>::error("Task not found".to_string()),
+                    StatusCode::NOT_FOUND,
+                );
+            }
+        };
+
+        // Verify the signature
+        // Message format: "query_task:{task_id}:{timestamp}"
+        let message = format!("query_task:{}:{}", auth_request.task_id, auth_request.timestamp);
+        let message_hash = {
+            let mut hasher = Sha256::new();
+            hasher.update(message.as_bytes());
+            hasher.finalize()
+        };
+
+        // Parse the public key
+        let public_key = match FunaiPublicKey::from_hex(&auth_request.public_key) {
+            Ok(pk) => pk,
+            Err(e) => {
+                error!("Invalid public key format: {}", e);
+                return self.json_response(
+                    ApiResponse::<String>::error("Invalid public key format".to_string()),
+                    StatusCode::BAD_REQUEST,
+                );
+            }
+        };
+
+        // Parse the signature
+        let signature_bytes = match hex_bytes(&auth_request.signature) {
+            Ok(s) => s,
+            Err(e) => {
+                error!("Invalid signature format: {}", e);
+                return self.json_response(
+                    ApiResponse::<String>::error("Invalid signature format".to_string()),
+                    StatusCode::BAD_REQUEST,
+                );
+            }
+        };
+
+        // Verify the signature using secp256k1
+        use secp256k1::{Secp256k1, Message, ecdsa::Signature as EcdsaSignature, PublicKey as Secp256k1PubKey};
+        
+        let secp = Secp256k1::verification_only();
+        
+        let msg = match Message::from_slice(&message_hash) {
+            Ok(m) => m,
+            Err(e) => {
+                error!("Failed to create message from hash: {}", e);
+                return self.json_response(
+                    ApiResponse::<String>::error("Internal error".to_string()),
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                );
+            }
+        };
+
+        let sig = match EcdsaSignature::from_compact(&signature_bytes) {
+            Ok(s) => s,
+            Err(_) => {
+                // Try DER format
+                match EcdsaSignature::from_der(&signature_bytes) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        error!("Invalid signature: {}", e);
+                        return self.json_response(
+                            ApiResponse::<String>::error("Invalid signature format".to_string()),
+                            StatusCode::BAD_REQUEST,
+                        );
+                    }
+                }
+            }
+        };
+
+        let pk = match Secp256k1PubKey::from_slice(&public_key.to_bytes_compressed()) {
+            Ok(p) => p,
+            Err(e) => {
+                error!("Failed to parse public key: {}", e);
+                return self.json_response(
+                    ApiResponse::<String>::error("Invalid public key".to_string()),
+                    StatusCode::BAD_REQUEST,
+                );
+            }
+        };
+
+        // Verify signature
+        if secp.verify_ecdsa(&msg, &sig, &pk).is_err() {
+            warn!("Signature verification failed for task {}", auth_request.task_id);
+            return self.json_response(
+                ApiResponse::<String>::error("Signature verification failed".to_string()),
+                StatusCode::UNAUTHORIZED,
+            );
+        }
+
+        // Derive address from the public key and compare with task's user_address
+        let derived_address_mainnet = FunaiAddress::from_public_keys(
+            C32_ADDRESS_VERSION_MAINNET_SINGLESIG,
+            &AddressHashMode::SerializeP2PKH,
+            1,
+            &vec![public_key.clone()],
+        );
+        let derived_address_testnet = FunaiAddress::from_public_keys(
+            C32_ADDRESS_VERSION_TESTNET_SINGLESIG,
+            &AddressHashMode::SerializeP2PKH,
+            1,
+            &vec![public_key.clone()],
+        );
+        
+        let mainnet_matches = derived_address_mainnet
+            .as_ref()
+            .map(|a| a.to_string() == task.user_address)
+            .unwrap_or(false);
+        let testnet_matches = derived_address_testnet
+            .as_ref()
+            .map(|a| a.to_string() == task.user_address)
+            .unwrap_or(false);
+            
+        if !mainnet_matches && !testnet_matches {
+            let mainnet_str = derived_address_mainnet.map(|a| a.to_string()).unwrap_or_default();
+            let testnet_str = derived_address_testnet.map(|a| a.to_string()).unwrap_or_default();
+            warn!(
+                "Address mismatch: task owner {} vs requester {} / {}",
+                task.user_address, mainnet_str, testnet_str
+            );
+            return self.json_response(
+                ApiResponse::<String>::error("Unauthorized: you are not the owner of this task".to_string()),
+                StatusCode::FORBIDDEN,
+            );
+        }
+
+        info!("Authenticated status query for task {} by {}", auth_request.task_id, task.user_address);
+
+        // Return task status
+        let result_data = task.result.as_ref().map(|r| TaskResultData {
+            output: r.output.clone(),
+            confidence: r.confidence,
+            completed_at: r.completed_at,
+            inference_node_id: r.inference_node_id.clone(),
+        });
+
+        let response = TaskStatusResponse {
+            task_id: task.task_id.clone(),
+            user_input: task.user_input.clone(),
+            context: task.context.clone(),
+            model_name: format!("{:?}", task.model_type),
+            max_infer_time: task.max_infer_time,
+            infer_fee: task.infer_fee,
+            created_at: task.created_at,
+            status: task.status.to_string(),
+            result: result_data,
+        };
+
+        self.json_response(ApiResponse::success(response), StatusCode::OK)
+    }
+
+    /// Handle get task status (internal use only - no authentication)
+    /// This is for Miner and internal services that need to query task status
+    async fn handle_get_task_status_internal(&self, task_id: Option<String>) -> Response<Body> {
         let task_id = match task_id {
             Some(id) => id,
             None => {
@@ -711,7 +1038,16 @@ impl InferenceApiServer {
 
         match task {
             Some(task) => {
-                info!("Retrieved status for task {}: {:?}", task_id, task.status);
+                info!("Retrieved internal status for task {}: {:?}", task_id, task.status);
+                
+                // Convert result if present
+                let result_data = task.result.as_ref().map(|r| TaskResultData {
+                    output: r.output.clone(),
+                    confidence: r.confidence,
+                    completed_at: r.completed_at,
+                    inference_node_id: r.inference_node_id.clone(),
+                });
+
                 let response = TaskStatusResponse {
                     task_id: task.task_id.clone(),
                     user_input: task.user_input.clone(),
@@ -721,6 +1057,7 @@ impl InferenceApiServer {
                     infer_fee: task.infer_fee,
                     created_at: task.created_at,
                     status: task.status.to_string(),
+                    result: result_data,
                 };
                 self.json_response(ApiResponse::success(response), StatusCode::OK)
             }
@@ -752,6 +1089,78 @@ impl InferenceApiServer {
         };
 
         self.json_response(ApiResponse::success(nodes), StatusCode::OK)
+    }
+
+    /// Handle get public key request - returns the signer's public key for encryption
+    async fn handle_get_public_key(&self) -> Response<Body> {
+        let (public_key, signer_address) = {
+            let service = self.shared_state.lock().unwrap();
+            service.get_encryption_public_key()
+        };
+
+        let response = SignerPublicKeyResponse {
+            public_key,
+            signer_address,
+        };
+
+        self.json_response(ApiResponse::success(response), StatusCode::OK)
+    }
+
+    /// Handle decrypt input request - decrypts inference input for authorized requesters
+    async fn handle_decrypt_input(&self, req: Request<Body>) -> Response<Body> {
+        match self.parse_json_body::<DecryptInputRequest>(req).await {
+            Ok(request) => {
+                // Validate the request
+                if request.task_id.is_empty() {
+                    return self.json_response(
+                        ApiResponse::<DecryptInputResponse>::error("Task ID is required".to_string()),
+                        StatusCode::BAD_REQUEST,
+                    );
+                }
+
+                // Attempt to decrypt
+                let result = {
+                    let service = self.shared_state.lock().unwrap();
+                    service.decrypt_task_input(
+                        &request.task_id,
+                        &request.requester_public_key,
+                        &request.signature,
+                        &request.requester_type,
+                    )
+                };
+
+                match result {
+                    Ok((user_input, context)) => {
+                        let response = DecryptInputResponse {
+                            task_id: request.task_id,
+                            user_input: Some(user_input),
+                            context: Some(context),
+                            success: true,
+                            error: None,
+                        };
+                        info!("Successfully decrypted input for task");
+                        self.json_response(ApiResponse::success(response), StatusCode::OK)
+                    }
+                    Err(e) => {
+                        warn!("Failed to decrypt input: {}", e);
+                        let response = DecryptInputResponse {
+                            task_id: request.task_id,
+                            user_input: None,
+                            context: None,
+                            success: false,
+                            error: Some(e),
+                        };
+                        self.json_response(ApiResponse::success(response), StatusCode::OK)
+                    }
+                }
+            }
+            Err(e) => {
+                self.json_response(
+                    ApiResponse::<DecryptInputResponse>::error(format!("Invalid request: {}", e)),
+                    StatusCode::BAD_REQUEST,
+                )
+            }
+        }
     }
 
     /// Handle health check
@@ -818,8 +1227,17 @@ impl InferenceApiServer {
 
     /// Extract task ID from path
     fn extract_task_id_from_path(&self, path: &str) -> Option<String> {
-        // Path format: /api/v1/tasks/{task_id}/status
+        // Path format: /api/v1/internal/tasks/{task_id}/status
+        // or legacy: /api/v1/tasks/{task_id}/status
         let parts: Vec<&str> = path.split('/').collect();
+        
+        // Check for internal path: /api/v1/internal/tasks/{task_id}/status
+        if parts.len() >= 6 && parts[1] == "api" && parts[2] == "v1" 
+            && parts[3] == "internal" && parts[4] == "tasks" {
+            return Some(parts[5].to_string());
+        }
+        
+        // Legacy path: /api/v1/tasks/{task_id}/status
         if parts.len() >= 5 && parts[1] == "api" && parts[2] == "v1" && parts[3] == "tasks" {
             Some(parts[4].to_string())
         } else {

@@ -94,14 +94,17 @@ MessageSlotID {
     /// Transactions list for miners and signers to observe
     Transactions = 11,
     /// DKG Results
-    DkgResults = 12
+    DkgResults = 12,
+    /// Signer Endpoint Announcement for other signers to discover
+    EndpointAnnouncement = 13
 });
 
 define_u8_enum!(SignerMessageTypePrefix {
     BlockResponse = 0,
     Packet = 1,
     Transactions = 2,
-    DkgResults = 3
+    DkgResults = 3,
+    EndpointAnnouncement = 4
 });
 
 impl MessageSlotID {
@@ -142,6 +145,7 @@ impl From<&SignerMessage> for SignerMessageTypePrefix {
             SignerMessage::BlockResponse(_) => SignerMessageTypePrefix::BlockResponse,
             SignerMessage::Transactions(_) => SignerMessageTypePrefix::Transactions,
             SignerMessage::DkgResults { .. } => SignerMessageTypePrefix::DkgResults,
+            SignerMessage::EndpointAnnouncement(_) => SignerMessageTypePrefix::EndpointAnnouncement,
         }
     }
 }
@@ -218,6 +222,50 @@ impl From<&RejectCode> for RejectCodeTypePrefix {
     }
 }
 
+/// Signer endpoint announcement for discovery by other signers
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SignerEndpointAnnouncement {
+    /// The signer's public key (hex encoded)
+    pub public_key: String,
+    /// The signer's HTTP endpoint URL for API requests (e.g., "http://signer:30000")
+    pub endpoint: String,
+    /// The signer's principal address
+    pub principal: String,
+    /// Timestamp of this announcement
+    pub timestamp: u64,
+}
+
+impl FunaiMessageCodec for SignerEndpointAnnouncement {
+    fn consensus_serialize<W: Write>(&self, fd: &mut W) -> Result<(), CodecError> {
+        write_next(fd, &self.public_key.as_bytes().to_vec())?;
+        write_next(fd, &self.endpoint.as_bytes().to_vec())?;
+        write_next(fd, &self.principal.as_bytes().to_vec())?;
+        write_next(fd, &self.timestamp)?;
+        Ok(())
+    }
+
+    fn consensus_deserialize<R: Read>(fd: &mut R) -> Result<Self, CodecError> {
+        let public_key_bytes: Vec<u8> = read_next(fd)?;
+        let endpoint_bytes: Vec<u8> = read_next(fd)?;
+        let principal_bytes: Vec<u8> = read_next(fd)?;
+        let timestamp: u64 = read_next(fd)?;
+
+        let public_key = String::from_utf8(public_key_bytes)
+            .map_err(|e| CodecError::DeserializeError(format!("Invalid public_key UTF-8: {}", e)))?;
+        let endpoint = String::from_utf8(endpoint_bytes)
+            .map_err(|e| CodecError::DeserializeError(format!("Invalid endpoint UTF-8: {}", e)))?;
+        let principal = String::from_utf8(principal_bytes)
+            .map_err(|e| CodecError::DeserializeError(format!("Invalid principal UTF-8: {}", e)))?;
+
+        Ok(Self {
+            public_key,
+            endpoint,
+            principal,
+            timestamp,
+        })
+    }
+}
+
 /// The messages being sent through the funai db contracts
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub enum SignerMessage {
@@ -234,6 +282,8 @@ pub enum SignerMessage {
         /// The polynomial commits used to construct the aggregate key
         party_polynomials: Vec<(u32, PolyCommitment)>,
     },
+    /// Signer endpoint announcement for other signers to discover
+    EndpointAnnouncement(SignerEndpointAnnouncement),
 }
 
 impl Debug for SignerMessage {
@@ -255,6 +305,7 @@ impl Debug for SignerMessage {
                     .field("party_polynomials", &party_polynomials)
                     .finish()
             }
+            Self::EndpointAnnouncement(a) => Debug::fmt(a, f),
         }
     }
 }
@@ -278,6 +329,7 @@ impl SignerMessage {
             Self::BlockResponse(_) => MessageSlotID::BlockResponse,
             Self::Transactions(_) => MessageSlotID::Transactions,
             Self::DkgResults { .. } => MessageSlotID::DkgResults,
+            Self::EndpointAnnouncement(_) => MessageSlotID::EndpointAnnouncement,
         }
     }
 }
@@ -345,6 +397,9 @@ impl FunaiMessageCodec for SignerMessage {
                     party_polynomials.iter().map(|(a, b)| (a, b)),
                 )?;
             }
+            SignerMessage::EndpointAnnouncement(announcement) => {
+                announcement.consensus_serialize(fd)?;
+            }
         };
         Ok(())
     }
@@ -382,6 +437,10 @@ impl FunaiMessageCodec for SignerMessage {
                     aggregate_key,
                     party_polynomials,
                 }
+            }
+            SignerMessageTypePrefix::EndpointAnnouncement => {
+                let announcement = SignerEndpointAnnouncement::consensus_deserialize(fd)?;
+                SignerMessage::EndpointAnnouncement(announcement)
             }
         };
         Ok(message)
