@@ -892,11 +892,13 @@ impl InferenceApiServer {
             }
         };
 
-        // Parse the signature
-        let signature_bytes = match hex_bytes(&auth_request.signature) {
+        // Parse the signature (remove 0x prefix if present)
+        let sig_hex = auth_request.signature.strip_prefix("0x")
+            .unwrap_or(&auth_request.signature);
+        let signature_bytes = match hex_bytes(sig_hex) {
             Ok(s) => s,
             Err(e) => {
-                error!("Invalid signature format: {}", e);
+                error!("Invalid signature hex format: {}", e);
                 return self.json_response(
                     ApiResponse::<String>::error("Invalid signature format".to_string()),
                     StatusCode::BAD_REQUEST,
@@ -920,14 +922,26 @@ impl InferenceApiServer {
             }
         };
 
-        let sig = match EcdsaSignature::from_compact(&signature_bytes) {
+        // Handle different signature formats:
+        // - RSV format (65 bytes): R (32) + S (32) + V (1) - from SDK signMessageHashRsv
+        // - Compact format (64 bytes): R (32) + S (32)
+        // - DER format (variable length)
+        let compact_bytes = if signature_bytes.len() == 65 {
+            // RSV format: extract R+S (first 64 bytes), ignore V (recovery byte)
+            debug!("Parsing RSV format signature (65 bytes)");
+            signature_bytes[0..64].to_vec()
+        } else {
+            signature_bytes.clone()
+        };
+
+        let sig = match EcdsaSignature::from_compact(&compact_bytes) {
             Ok(s) => s,
             Err(_) => {
-                // Try DER format
+                // Try DER format with original bytes
                 match EcdsaSignature::from_der(&signature_bytes) {
                     Ok(s) => s,
                     Err(e) => {
-                        error!("Invalid signature: {}", e);
+                        error!("Invalid signature (tried compact and DER): {}", e);
                         return self.json_response(
                             ApiResponse::<String>::error("Invalid signature format".to_string()),
                             StatusCode::BAD_REQUEST,
