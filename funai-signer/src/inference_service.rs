@@ -323,10 +323,20 @@ impl InferenceDatabase {
                 output TEXT,
                 confidence REAL,
                 completed_at INTEGER,
-                inference_node_id TEXT
+                inference_node_id TEXT,
+                encrypted_user_input TEXT,
+                encrypted_context TEXT,
+                signer_public_key TEXT,
+                is_encrypted INTEGER DEFAULT 0
             )",
             [],
         )?;
+
+        // Migration: Add encryption columns if they don't exist
+        let _ = conn.execute::<[&dyn rusqlite::ToSql; 0]>("ALTER TABLE inference_tasks ADD COLUMN encrypted_user_input TEXT", []);
+        let _ = conn.execute::<[&dyn rusqlite::ToSql; 0]>("ALTER TABLE inference_tasks ADD COLUMN encrypted_context TEXT", []);
+        let _ = conn.execute::<[&dyn rusqlite::ToSql; 0]>("ALTER TABLE inference_tasks ADD COLUMN signer_public_key TEXT", []);
+        let _ = conn.execute::<[&dyn rusqlite::ToSql; 0]>("ALTER TABLE inference_tasks ADD COLUMN is_encrypted INTEGER DEFAULT 0", []);
 
         // Create inference nodes table
         conn.execute::<[&dyn rusqlite::ToSql; 0]>(
@@ -365,8 +375,9 @@ impl InferenceDatabase {
             "INSERT OR REPLACE INTO inference_tasks 
              (task_id, user_address, user_input, context, fee, nonce, infer_fee, 
               max_infer_time, model_type, signed_tx, status, created_at, updated_at, 
-              output, confidence, completed_at, inference_node_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              output, confidence, completed_at, inference_node_id,
+              encrypted_user_input, encrypted_context, signer_public_key, is_encrypted)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             params![
                 task.task_id,
                 task.user_address,
@@ -385,6 +396,10 @@ impl InferenceDatabase {
                 confidence,
                 completed_at,
                 inference_node_id,
+                task.encrypted_user_input,
+                task.encrypted_context,
+                task.signer_public_key,
+                task.is_encrypted as i32,
             ],
         )?;
 
@@ -396,7 +411,8 @@ impl InferenceDatabase {
         let mut stmt = self.conn.prepare(
             "SELECT task_id, user_address, user_input, context, fee, nonce, infer_fee,
                     max_infer_time, model_type, signed_tx, status, created_at, updated_at,
-                    output, confidence, completed_at, inference_node_id
+                    output, confidence, completed_at, inference_node_id,
+                    encrypted_user_input, encrypted_context, signer_public_key, is_encrypted
              FROM inference_tasks WHERE task_id = ?"
         )?;
 
@@ -420,6 +436,10 @@ impl InferenceDatabase {
             let confidence: Option<f64> = row.get(14)?;
             let completed_at: Option<i64> = row.get(15)?;
             let inference_node_id: Option<String> = row.get(16)?;
+            let encrypted_user_input: Option<String> = row.get(17)?;
+            let encrypted_context: Option<String> = row.get(18)?;
+            let signer_public_key: Option<String> = row.get(19)?;
+            let is_encrypted: i32 = row.get::<_, Option<i32>>(20)?.unwrap_or(0);
 
             let model_type = match model_type_str.as_str() {
                 "deepseek" => InferModelType::DeepSeek(None),
@@ -448,9 +468,9 @@ impl InferenceDatabase {
                 task_id,
                 user_address,
                 user_input,
-                encrypted_user_input: None,
+                encrypted_user_input,
                 context,
-                encrypted_context: None,
+                encrypted_context,
                 fee: fee as u64,
                 nonce: nonce as u64,
                 infer_fee: infer_fee as u64,
@@ -461,8 +481,8 @@ impl InferenceDatabase {
                 created_at: created_at as u64,
                 updated_at: updated_at as u64,
                 result,
-                signer_public_key: None,
-                is_encrypted: false,
+                signer_public_key,
+                is_encrypted: is_encrypted != 0,
             }))
         } else {
             Ok(None)
@@ -1134,6 +1154,11 @@ impl InferenceService {
     /// Get a clone of the shared state for API server
     pub fn get_shared_state(&self) -> InferenceServiceState {
         self.state.clone()
+    }
+
+    /// Set the signer's private key for encryption/decryption
+    pub fn set_signer_key(&mut self, private_key: funai_common::types::chainstate::FunaiPrivateKey, signer_address: String) {
+        self.state.set_signer_key(private_key, signer_address);
     }
 }
 

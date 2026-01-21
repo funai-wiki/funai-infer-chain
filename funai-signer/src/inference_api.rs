@@ -94,9 +94,9 @@ pub struct SubmitTaskRequest {
     pub task_id: Option<String>,
     /// User address
     pub user_address: String,
-    /// User input
+    /// User input (may be encrypted JSON if is_encrypted is true)
     pub user_input: String,
-    /// Context information
+    /// Context information (may be encrypted JSON if is_encrypted is true)
     pub context: String,
     /// Transaction fee (optional)
     pub fee: Option<u64>,
@@ -110,6 +110,11 @@ pub struct SubmitTaskRequest {
     pub model_name: String,
     /// Signed transaction hex (optional)
     pub signed_tx: Option<String>,
+    /// Whether the user_input and context are encrypted
+    #[serde(default)]
+    pub is_encrypted: bool,
+    /// Signer's public key used for encryption (required if is_encrypted is true)
+    pub signer_public_key: Option<String>,
 }
 
 /// Node status response
@@ -488,19 +493,50 @@ impl InferenceApiServer {
                     format!("api-{}", uuid::Uuid::new_v4().to_string())
                 });
 
-                let task = InferTask::new(
-                    task_id.clone(),
-                    request.user_address,
-                    request.user_input,
-                    request.context,
-                    request.fee.unwrap_or(0),
-                    request.nonce.unwrap_or(origin.nonce()),
-                    request.infer_fee,
-                    request.max_infer_time,
-                    self.parse_model_type(&request.model_name),
-                    request.signed_tx, // Pass the original Option<String>
-                );
+                // Create task based on whether it's encrypted or not
+                let task = if request.is_encrypted {
+                    // For encrypted tasks:
+                    // - user_input contains the encrypted JSON data
+                    // - we store it in encrypted_user_input for decryption later
+                    // - user_input field stores "[encrypted]" placeholder
+                    let signer_pubkey = request.signer_public_key.unwrap_or_else(|| {
+                        // Get signer's public key from state
+                        let service = self.shared_state.lock().unwrap();
+                        service.signer_public_key_hex.clone().unwrap_or_default()
+                    });
+                    
+                    info!("Creating encrypted task {}", task_id);
+                    InferTask::new_encrypted(
+                        task_id.clone(),
+                        request.user_address,
+                        "[encrypted]".to_string(), // Placeholder for user_input
+                        request.user_input,        // Encrypted data goes to encrypted_user_input
+                        "[encrypted]".to_string(), // Placeholder for context
+                        request.context,           // Encrypted data goes to encrypted_context
+                        request.fee.unwrap_or(0),
+                        request.nonce.unwrap_or(origin.nonce()),
+                        request.infer_fee,
+                        request.max_infer_time,
+                        self.parse_model_type(&request.model_name),
+                        request.signed_tx,
+                        signer_pubkey,
+                    )
+                } else {
+                    InferTask::new(
+                        task_id.clone(),
+                        request.user_address,
+                        request.user_input,
+                        request.context,
+                        request.fee.unwrap_or(0),
+                        request.nonce.unwrap_or(origin.nonce()),
+                        request.infer_fee,
+                        request.max_infer_time,
+                        self.parse_model_type(&request.model_name),
+                        request.signed_tx,
+                    )
+                };
 
+                let is_encrypted = request.is_encrypted;
                 let result = {
                     let service = self.shared_state.lock().unwrap();
                     service.submit_task(task)
@@ -508,13 +544,22 @@ impl InferenceApiServer {
 
                 match result {
                     Ok(()) => {
-                // Notify via event sender
+                        // Notify via event sender
                         if let Err(e) = self.event_sender.send(InferenceServiceEvent::TaskSubmitted(task_id.clone())).await {
-                     error!("Failed to send task submitted event: {}", e);
-                }
+                            error!("Failed to send task submitted event: {}", e);
+                        }
 
-                        info!("Task {} submitted via API successfully", task_id);
-                self.json_response(ApiResponse::success(json!({ "task_id": task_id })), StatusCode::OK)
+                        info!("Task {} submitted via API successfully (encrypted: {})", task_id, is_encrypted);
+                        
+                        if is_encrypted {
+                            self.json_response(ApiResponse::success(json!({ 
+                                "task_id": task_id,
+                                "encrypted": true,
+                                "message": "Inference task submitted with end-to-end encryption"
+                            })), StatusCode::OK)
+                        } else {
+                            self.json_response(ApiResponse::success(json!({ "task_id": task_id })), StatusCode::OK)
+                        }
                     }
                     Err(e) => {
                         error!("Failed to submit task {}: {}", task_id, e);
@@ -718,20 +763,34 @@ impl InferenceApiServer {
                 // For registered Infer Nodes, decrypt the input directly
                 // No need for a separate decryption request
                 let decrypted_user_input = if task.is_encrypted {
+                    info!("Task {} is encrypted, attempting decryption", task.task_id);
                     // Task is encrypted, need to decrypt
                     if let Some(ref encrypted_input) = task.encrypted_user_input {
+                        info!("Found encrypted_user_input, length: {}", encrypted_input.len());
                         match crate::encryption::EncryptedData::from_json(encrypted_input) {
                             Ok(encrypted_data) => {
+                                info!("Parsed encrypted data successfully");
+                                info!("  - signer_public_key: {}", encrypted_data.signer_public_key);
+                                info!("  - ephemeral_public_key: {}", encrypted_data.ephemeral_public_key);
+                                info!("  - nonce: {}", encrypted_data.nonce);
+                                info!("  - ciphertext length: {}", encrypted_data.ciphertext.len());
+                                
                                 // Get signer's private key to decrypt
-                                let signer_key = {
+                                let (signer_key, signer_pub) = {
                                     let service = self.shared_state.lock().unwrap();
-                                    service.signer_private_key.clone()
+                                    (service.signer_private_key.clone(), service.signer_public_key_hex.clone())
                                 };
+                                
+                                info!("Signer public key from state: {:?}", signer_pub);
                                 
                                 match signer_key {
                                     Some(key) => {
+                                        info!("Attempting decryption with signer key...");
                                         match crate::encryption::InferenceEncryption::decrypt(&encrypted_data, &key) {
-                                            Ok(plaintext) => plaintext,
+                                            Ok(plaintext) => {
+                                                info!("Decryption successful! Plaintext length: {}", plaintext.len());
+                                                plaintext
+                                            }
                                             Err(e) => {
                                                 error!("Failed to decrypt task input: {}", e);
                                                 // Fallback to stored user_input
@@ -747,11 +806,13 @@ impl InferenceApiServer {
                             }
                             Err(e) => {
                                 error!("Failed to parse encrypted data: {}", e);
+                                error!("Raw encrypted input: {}", encrypted_input);
                                 task.user_input.clone()
                             }
                         }
                     } else {
                         // Encrypted flag is true but no encrypted data, use plain text
+                        warn!("Task is_encrypted=true but encrypted_user_input is None!");
                         task.user_input.clone()
                     }
                 } else {

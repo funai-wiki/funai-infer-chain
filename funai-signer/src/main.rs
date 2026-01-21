@@ -229,6 +229,32 @@ fn handle_run(args: RunSignerArgs) {
         inference_db_path,
     );
     
+    // Set the signer's private key for encryption/decryption
+    {
+        use funai_common::address::AddressHashMode;
+        use funai_common::types::chainstate::FunaiAddress;
+        use funailib::chainstate::funai::{FunaiPublicKey, C32_ADDRESS_VERSION_MAINNET_SINGLESIG, C32_ADDRESS_VERSION_TESTNET_SINGLESIG};
+        
+        let private_key = config.funai_private_key.clone();
+        let public_key = Secp256k1PublicKey::from_private(&private_key);
+        let signer_address = FunaiAddress::from_public_keys(
+            if config.network.is_mainnet() {
+                C32_ADDRESS_VERSION_MAINNET_SINGLESIG
+            } else {
+                C32_ADDRESS_VERSION_TESTNET_SINGLESIG
+            },
+            &AddressHashMode::SerializeP2PKH,
+            1,
+            &vec![FunaiPublicKey::from_slice(
+                &public_key.to_bytes_compressed()
+            ).expect("Invalid public key")],
+        ).expect("Failed to create signer address");
+        
+        // Set signer key on the inference service (modifies internal state)
+        inference_service.set_signer_key(private_key, signer_address.to_string());
+        info!("Signer encryption key configured for address: {}", signer_address);
+    }
+    
     // Create a separate channel for API server events
     let (api_event_sender, _api_event_receiver) = tokio::sync::mpsc::channel(1000);
     

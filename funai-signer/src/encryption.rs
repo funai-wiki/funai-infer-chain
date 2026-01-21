@@ -361,6 +361,9 @@ impl InferenceEncryption {
     /// - Decryptor: uses recipient_private_key * ephemeral_public_key
     /// 
     /// Due to the properties of elliptic curves: a*B = b*A (where A=a*G, B=b*G)
+    /// 
+    /// Note: Uses shared_secret_point to get raw x-coordinate, then SHA256.
+    /// This matches the SDK's implementation.
     fn derive_shared_secret(
         ephemeral_private: &FunaiPrivateKey,
         signer_public: &Secp256k1PublicKey,
@@ -374,12 +377,17 @@ impl InferenceEncryption {
         let signer_pk = Secp256k1PubKey::from_slice(&signer_public.to_bytes_compressed())
             .map_err(|e| EncryptionError::KeyGenerationError(format!("Invalid signer public key: {}", e)))?;
         
-        // Perform ECDH: shared_point = ephemeral_private * signer_public
-        let shared_point = secp256k1::ecdh::SharedSecret::new(&signer_pk, &ephemeral_sk);
+        // Perform ECDH to get the raw shared point x-coordinate
+        // Use shared_secret_point to get the raw x-coordinate (32 bytes)
+        // without the default SHA256 hashing that SharedSecret::new does
+        let mut x_coord = [0u8; 32];
+        let shared_point = secp256k1::ecdh::shared_secret_point(&signer_pk, &ephemeral_sk);
+        // shared_secret_point returns 64 bytes: x (32 bytes) || y (32 bytes)
+        x_coord.copy_from_slice(&shared_point[..32]);
         
-        // Hash the shared point to derive the final key (standard ECIES practice)
+        // Hash the x-coordinate with SHA256 to get the encryption key
         let mut hasher = Sha256::new();
-        hasher.update(shared_point.as_ref());
+        hasher.update(&x_coord);
         let result = hasher.finalize();
         
         let mut secret = [0u8; 32];
@@ -391,6 +399,11 @@ impl InferenceEncryption {
     /// 
     /// This produces the same shared secret as derive_shared_secret due to ECDH properties:
     /// signer_private * ephemeral_public = ephemeral_private * signer_public
+    /// 
+    /// Note: We use a custom hash function to get the raw x-coordinate, then hash it with SHA256.
+    /// This matches the SDK's implementation which does:
+    /// 1. ECDH to get shared point (x-coordinate)
+    /// 2. SHA256(x-coordinate) to get the encryption key
     fn derive_shared_secret_for_decrypt(
         signer_private: &FunaiPrivateKey,
         ephemeral_public: &Secp256k1PublicKey,
@@ -404,13 +417,19 @@ impl InferenceEncryption {
         let ephemeral_pk = Secp256k1PubKey::from_slice(&ephemeral_public.to_bytes_compressed())
             .map_err(|e| EncryptionError::KeyGenerationError(format!("Invalid ephemeral public key: {}", e)))?;
         
-        // Perform ECDH: shared_point = signer_private * ephemeral_public
-        // Due to ECDH properties, this equals: ephemeral_private * signer_public
-        let shared_point = secp256k1::ecdh::SharedSecret::new(&ephemeral_pk, &signer_sk);
+        // Perform ECDH to get the raw shared point x-coordinate
+        // Use shared_secret_point to get the raw x-coordinate (32 bytes)
+        // without the default SHA256 hashing that SharedSecret::new does
+        let mut x_coord = [0u8; 32];
+        let shared_point = secp256k1::ecdh::shared_secret_point(&ephemeral_pk, &signer_sk);
+        // shared_secret_point returns 64 bytes: x (32 bytes) || y (32 bytes)
+        // We only need the x-coordinate (first 32 bytes)
+        x_coord.copy_from_slice(&shared_point[..32]);
         
-        // Hash the shared point to derive the final key (must match encryption side)
+        // Hash the x-coordinate with SHA256 to get the encryption key
+        // This matches the SDK's: encryptionKey = sha256(sharedSecretX)
         let mut hasher = Sha256::new();
-        hasher.update(shared_point.as_ref());
+        hasher.update(&x_coord);
         let result = hasher.finalize();
         
         let mut secret = [0u8; 32];
