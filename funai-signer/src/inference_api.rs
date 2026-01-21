@@ -197,6 +197,9 @@ pub struct TaskStatusResponse {
     pub status: String,
     /// Inference result (if completed)
     pub result: Option<TaskResultData>,
+    /// Transaction ID (hash of the signed transaction)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub txid: Option<String>,
 }
 
 /// Task result data (returned when task is completed)
@@ -1070,6 +1073,58 @@ impl InferenceApiServer {
 
         info!("Authenticated status query for task {} by {}", auth_request.task_id, task.user_address);
 
+        // For encrypted tasks, decrypt the user_input and context for display
+        let (display_user_input, display_context) = if task.is_encrypted {
+            let signer_key = {
+                let service = self.shared_state.lock().unwrap();
+                service.signer_private_key.clone()
+            };
+            
+            let decrypted_input = if let (Some(ref encrypted_input), Some(ref key)) = (&task.encrypted_user_input, &signer_key) {
+                match crate::encryption::EncryptedData::from_json(encrypted_input) {
+                    Ok(encrypted_data) => {
+                        match crate::encryption::InferenceEncryption::decrypt(&encrypted_data, key) {
+                            Ok(plaintext) => plaintext,
+                            Err(e) => {
+                                warn!("Failed to decrypt user_input for display: {}", e);
+                                task.user_input.clone()
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to parse encrypted user_input: {}", e);
+                        task.user_input.clone()
+                    }
+                }
+            } else {
+                task.user_input.clone()
+            };
+            
+            let decrypted_context = if let (Some(ref encrypted_ctx), Some(ref key)) = (&task.encrypted_context, &signer_key) {
+                match crate::encryption::EncryptedData::from_json(encrypted_ctx) {
+                    Ok(encrypted_data) => {
+                        match crate::encryption::InferenceEncryption::decrypt(&encrypted_data, key) {
+                            Ok(plaintext) => plaintext,
+                            Err(e) => {
+                                warn!("Failed to decrypt context for display: {}", e);
+                                task.context.clone()
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to parse encrypted context: {}", e);
+                        task.context.clone()
+                    }
+                }
+            } else {
+                task.context.clone()
+            };
+            
+            (decrypted_input, decrypted_context)
+        } else {
+            (task.user_input.clone(), task.context.clone())
+        };
+
         // Return task status
         let result_data = task.result.as_ref().map(|r| TaskResultData {
             output: r.output.clone(),
@@ -1078,16 +1133,22 @@ impl InferenceApiServer {
             inference_node_id: r.inference_node_id.clone(),
         });
 
+        // Calculate txid from signed_tx (SHA256 hash of the transaction bytes)
+        let txid = task.signed_tx.as_ref().and_then(|tx_hex| {
+            Self::calculate_txid(tx_hex)
+        });
+
         let response = TaskStatusResponse {
             task_id: task.task_id.clone(),
-            user_input: task.user_input.clone(),
-            context: task.context.clone(),
+            user_input: display_user_input,
+            context: display_context,
             model_name: format!("{:?}", task.model_type),
             max_infer_time: task.max_infer_time,
             infer_fee: task.infer_fee,
             created_at: task.created_at,
             status: task.status.to_string(),
             result: result_data,
+            txid,
         };
 
         self.json_response(ApiResponse::success(response), StatusCode::OK)
@@ -1123,6 +1184,11 @@ impl InferenceApiServer {
                     inference_node_id: r.inference_node_id.clone(),
                 });
 
+                // Calculate txid from signed_tx
+                let txid = task.signed_tx.as_ref().and_then(|tx_hex| {
+                    Self::calculate_txid(tx_hex)
+                });
+
                 let response = TaskStatusResponse {
                     task_id: task.task_id.clone(),
                     user_input: task.user_input.clone(),
@@ -1133,6 +1199,7 @@ impl InferenceApiServer {
                     created_at: task.created_at,
                     status: task.status.to_string(),
                     result: result_data,
+                    txid,
                 };
                 self.json_response(ApiResponse::success(response), StatusCode::OK)
             }
@@ -1267,6 +1334,40 @@ impl InferenceApiServer {
 
         serde_json::from_slice(&body_bytes)
             .map_err(|e| format!("Failed to parse JSON: {}", e))
+    }
+
+    /// Calculate transaction ID (txid) from signed transaction hex
+    /// The txid is the SHA-512/256 hash of the serialized transaction
+    /// For Infer transactions, the node_principal and output_hash are zeroed out before hashing
+    fn calculate_txid(signed_tx_hex: &str) -> Option<String> {
+        use funai_common::util::hash::hex_bytes;
+        use funailib::chainstate::funai::FunaiTransaction;
+        use funailib::codec::FunaiMessageCodec;
+        
+        // Parse the hex string to bytes
+        let tx_bytes = match hex_bytes(signed_tx_hex) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                warn!("Failed to parse signed_tx hex: {}", e);
+                return None;
+            }
+        };
+        
+        // Deserialize the transaction
+        let tx = match FunaiTransaction::consensus_deserialize(&mut &tx_bytes[..]) {
+            Ok(tx) => tx,
+            Err(e) => {
+                warn!("Failed to deserialize transaction: {:?}", e);
+                return None;
+            }
+        };
+        
+        // Calculate txid using the transaction's txid() method
+        // This handles Infer transactions correctly (zeroing node_principal and output_hash)
+        let txid = tx.txid();
+        
+        // Return as 0x-prefixed hex string
+        Some(format!("0x{}", txid))
     }
 
     /// Create JSON response
