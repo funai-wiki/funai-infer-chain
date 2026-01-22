@@ -560,17 +560,27 @@ impl Signer {
                         block_info.invalid_txids = Vec::new();
                     }
                     Err(invalid_txs) => {
-                        block_info.valid = Some(false);
+                        // New policy: Accept block even with failed Infer transactions.
+                        // Failed Infer transactions will be processed on-chain but marked as failed
+                        // (no funds transferred, user loses only tx fee).
+                        // This prevents one failed Infer tx from blocking the entire block.
                         let mut sorted_invalid_txs = invalid_txs.clone();
                         sorted_invalid_txs.sort();
                         block_info.invalid_txids = sorted_invalid_txs.clone();
+                        
                         if !sorted_invalid_txs.is_empty() {
-                            warn!("{self}: Block validation failed with selective tx removal: {:?}", sorted_invalid_txs);
+                            // Log warning but still accept the block
+                            warn!("{self}: Block contains {} invalid Infer transactions, but accepting block anyway: {:?}", 
+                                sorted_invalid_txs.len(), sorted_invalid_txs);
+                            // Notify miners about invalid transactions (informational only)
                             let filter = BlockResponse::filter(signer_signature_hash, sorted_invalid_txs);
                             if let Err(e) = self.funaidb.send_message_with_retry(filter.into()) {
                                 warn!("{self}: Failed to send block filter to funai-db: {e:?}");
                             }
                         }
+                        
+                        // Accept the block - failed Infer txs will be handled on-chain
+                        block_info.valid = Some(true);
                     }
                 }
                 self.signer_db
