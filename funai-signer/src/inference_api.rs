@@ -87,6 +87,18 @@ pub struct RegisterNodeRequest {
     pub performance_score: Option<f64>,
 }
 
+/// Request for inference node to fetch a task (with signature authentication)
+#[derive(Serialize, Deserialize)]
+pub struct GetTaskRequest {
+    /// Node ID
+    pub node_id: String,
+    /// Request timestamp (Unix timestamp in seconds)
+    pub timestamp: u64,
+    /// Signature of "GET_TASK:{node_id}:{timestamp}" using the node's private key
+    /// Format: hex-encoded recoverable signature (65 bytes)
+    pub signature: String,
+}
+
 /// Request to submit an inference task via API
 #[derive(Serialize, Deserialize)]
 pub struct SubmitTaskRequest {
@@ -335,10 +347,9 @@ impl InferenceApiServer {
             (&Method::POST, "/api/v1/nodes/heartbeat") => {
                 self.handle_heartbeat(req).await
             }
-            // Inference node fetch task
-            (&Method::GET, path) if path.starts_with("/api/v1/nodes/") && path.ends_with("/tasks") => {
-                let node_id = self.extract_node_id_from_path(path);
-                self.handle_get_task(node_id).await
+            // Inference node fetch task (POST with signature authentication)
+            (&Method::POST, "/api/v1/nodes/tasks") => {
+                self.handle_get_task(req).await
             }
             // Inference node complete task
             (&Method::POST, "/api/v1/tasks/complete") => {
@@ -612,17 +623,149 @@ impl InferenceApiServer {
         }
     }
 
-    /// Handle inference node fetch task
-    async fn handle_get_task(&self, node_id: Option<String>) -> Response<Body> {
-        let node_id = match node_id {
-            Some(id) => id,
-            None => {
+    /// Handle inference node fetch task (with signature authentication)
+    async fn handle_get_task(&self, req: Request<Body>) -> Response<Body> {
+        // Parse request body
+        let request: GetTaskRequest = match self.parse_json_body(req).await {
+            Ok(r) => r,
+            Err(e) => {
+                error!("Failed to parse get task request: {}", e);
                 return self.json_response(
-                    ApiResponse::<String>::error("Invalid node ID".to_string()),
+                    ApiResponse::<String>::error(e),
                     StatusCode::BAD_REQUEST,
                 );
             }
         };
+
+        let node_id = request.node_id.clone();
+
+        // Validate timestamp (must be within 5 minutes)
+        let current_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        
+        if current_time.abs_diff(request.timestamp) > 300 {
+            return self.json_response(
+                ApiResponse::<String>::error("Request timestamp expired (must be within 5 minutes)".to_string()),
+                StatusCode::BAD_REQUEST,
+            );
+        }
+
+        // Get node's registered public key for signature verification
+        let node_public_key_hex = {
+            let service = self.shared_state.lock().unwrap();
+            let nodes = service.inference_nodes.lock().unwrap();
+            if let Some(node) = nodes.get(&node_id) {
+                Some(node.public_key.clone())
+            } else {
+                None
+            }
+        };
+
+        let node_public_key_hex = match node_public_key_hex {
+            Some(pk) => pk,
+            None => {
+                warn!("Node {} not registered, cannot fetch tasks", node_id);
+                return self.json_response(
+                    ApiResponse::<String>::error(format!("Node {} not registered", node_id)),
+                    StatusCode::FORBIDDEN,
+                );
+            }
+        };
+
+        // Verify signature
+        // Message format: "GET_TASK:{node_id}:{timestamp}"
+        let message = format!("GET_TASK:{}:{}", node_id, request.timestamp);
+        let message_hash = {
+            let mut hasher = Sha256::new();
+            hasher.update(message.as_bytes());
+            hasher.finalize()
+        };
+
+        // Parse signature (expect 65-byte RSV format or 64-byte compact)
+        let signature_bytes = match hex_bytes(&request.signature) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                return self.json_response(
+                    ApiResponse::<String>::error(format!("Invalid signature hex: {}", e)),
+                    StatusCode::BAD_REQUEST,
+                );
+            }
+        };
+
+        // Verify signature using secp256k1
+        let secp = secp256k1::Secp256k1::verification_only();
+        let message = match secp256k1::Message::from_slice(&message_hash) {
+            Ok(m) => m,
+            Err(e) => {
+                return self.json_response(
+                    ApiResponse::<String>::error(format!("Invalid message hash: {}", e)),
+                    StatusCode::BAD_REQUEST,
+                );
+            }
+        };
+
+        // Parse the registered public key
+        let expected_pubkey_bytes = match hex_bytes(&node_public_key_hex) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                return self.json_response(
+                    ApiResponse::<String>::error(format!("Invalid registered public key: {}", e)),
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                );
+            }
+        };
+
+        let expected_pubkey = match secp256k1::PublicKey::from_slice(&expected_pubkey_bytes) {
+            Ok(pk) => pk,
+            Err(e) => {
+                return self.json_response(
+                    ApiResponse::<String>::error(format!("Invalid registered public key format: {}", e)),
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                );
+            }
+        };
+
+        // Parse signature (handle both 65-byte RSV and 64-byte compact formats)
+        let signature = if signature_bytes.len() == 65 {
+            // RSV format: take first 64 bytes (R+S)
+            match secp256k1::ecdsa::Signature::from_compact(&signature_bytes[..64]) {
+                Ok(sig) => sig,
+                Err(e) => {
+                    return self.json_response(
+                        ApiResponse::<String>::error(format!("Invalid signature format: {}", e)),
+                        StatusCode::BAD_REQUEST,
+                    );
+                }
+            }
+        } else if signature_bytes.len() == 64 {
+            match secp256k1::ecdsa::Signature::from_compact(&signature_bytes) {
+                Ok(sig) => sig,
+                Err(e) => {
+                    return self.json_response(
+                        ApiResponse::<String>::error(format!("Invalid signature format: {}", e)),
+                        StatusCode::BAD_REQUEST,
+                    );
+                }
+            }
+        } else {
+            return self.json_response(
+                ApiResponse::<String>::error(format!("Invalid signature length: {} (expected 64 or 65)", signature_bytes.len())),
+                StatusCode::BAD_REQUEST,
+            );
+        };
+
+        // Verify the signature matches the registered public key
+        if secp.verify_ecdsa(&message, &signature, &expected_pubkey).is_err() {
+            warn!("Signature verification failed for node {}", node_id);
+            return self.json_response(
+                ApiResponse::<String>::error("Signature verification failed".to_string()),
+                StatusCode::FORBIDDEN,
+            );
+        }
+
+        info!("Node {} authenticated successfully", node_id);
 
         // Get tasks that this node can process
         let (task, node_pk_opt) = {

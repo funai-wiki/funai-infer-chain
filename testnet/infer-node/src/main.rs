@@ -179,17 +179,80 @@ struct ApiResponse<T> {
 }
 
 async fn poll_for_task(client: &reqwest::Client, config: &Config) -> Result<Option<TaskResponse>, Box<dyn std::error::Error + Send + Sync>> {
-    let url = format!("{}/api/v1/nodes/{}/tasks", config.signer_endpoint, config.node_id);
-    let resp = client.get(&url).send().await?;
+    let url = format!("{}/api/v1/nodes/tasks", config.signer_endpoint);
+    
+    // Get current timestamp
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    
+    // Create message to sign: "GET_TASK:{node_id}:{timestamp}"
+    let message = format!("GET_TASK:{}:{}", config.node_id, timestamp);
+    
+    // Sign the message with node's private key
+    let signature = sign_message(&message, &config.node_private_key)?;
+    
+    // Create request body
+    let body = serde_json::json!({
+        "node_id": config.node_id,
+        "timestamp": timestamp,
+        "signature": signature,
+    });
+    
+    let resp = client.post(&url).json(&body).send().await?;
 
     if resp.status() == reqwest::StatusCode::OK {
         let api_resp: ApiResponse<TaskResponse> = resp.json().await?;
         return Ok(api_resp.data);
     } else if resp.status() == reqwest::StatusCode::NO_CONTENT {
         return Ok(None);
+    } else if resp.status() == reqwest::StatusCode::FORBIDDEN {
+        let text = resp.text().await.unwrap_or_default();
+        error!("Authentication failed: {}", text);
+        return Err("Authentication failed".into());
     }
 
     Ok(None)
+}
+
+/// Sign a message using the node's private key
+fn sign_message(message: &str, private_key_hex: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    use sha2::{Sha256, Digest};
+    use secp256k1::{Secp256k1, SecretKey, Message};
+    use funai_common::util::hash::{hex_bytes, to_hex};
+    
+    // Parse private key
+    let pk_bytes = hex_bytes(private_key_hex)
+        .map_err(|e| format!("Invalid private key hex: {}", e))?;
+    
+    // Handle 33-byte compressed format (with 0x01 suffix)
+    let key_bytes = if pk_bytes.len() == 33 && pk_bytes[32] == 0x01 {
+        &pk_bytes[..32]
+    } else if pk_bytes.len() == 32 {
+        &pk_bytes[..]
+    } else {
+        return Err(format!("Invalid private key length: {}", pk_bytes.len()).into());
+    };
+    
+    let secret_key = SecretKey::from_slice(key_bytes)
+        .map_err(|e| format!("Invalid private key: {}", e))?;
+    
+    // Hash the message
+    let mut hasher = Sha256::new();
+    hasher.update(message.as_bytes());
+    let message_hash = hasher.finalize();
+    
+    // Create secp256k1 message
+    let secp_message = Message::from_slice(&message_hash)
+        .map_err(|e| format!("Invalid message hash: {}", e))?;
+    
+    // Sign
+    let secp = Secp256k1::new();
+    let signature = secp.sign_ecdsa(&secp_message, &secret_key);
+    
+    // Return hex-encoded compact signature (64 bytes)
+    Ok(to_hex(&signature.serialize_compact()))
 }
 
 async fn send_heartbeat(client: &reqwest::Client, config: &Config) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
