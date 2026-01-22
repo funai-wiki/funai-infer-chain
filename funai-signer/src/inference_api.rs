@@ -512,20 +512,27 @@ impl InferenceApiServer {
                     // For encrypted tasks:
                     // - user_input contains the encrypted JSON data
                     // - we store it in encrypted_user_input for decryption later
-                    // - user_input field stores "[encrypted]" placeholder
+                    // - user_input field stores hash placeholder "enc:{hash16}"
                     let signer_pubkey = request.signer_public_key.unwrap_or_else(|| {
                         // Get signer's public key from state
                         let service = self.shared_state.lock().unwrap();
                         service.signer_public_key_hex.clone().unwrap_or_default()
                     });
                     
-                    info!("Creating encrypted task {}", task_id);
+                    // Generate hash placeholders for on-chain storage
+                    // Format: "enc:{first16bytes_of_sha256}"
+                    let input_hash = Self::compute_encrypted_hash(&request.user_input);
+                    let context_hash = Self::compute_encrypted_hash(&request.context);
+                    
+                    info!("Creating encrypted task {} with hashes: input={}, context={}", 
+                        task_id, input_hash, context_hash);
+                    
                     InferTask::new_encrypted(
                         task_id.clone(),
                         request.user_address,
-                        "[encrypted]".to_string(), // Placeholder for user_input
+                        input_hash,                // Hash placeholder for user_input
                         request.user_input,        // Encrypted data goes to encrypted_user_input
-                        "[encrypted]".to_string(), // Placeholder for context
+                        context_hash,              // Hash placeholder for context
                         request.context,           // Encrypted data goes to encrypted_context
                         request.fee.unwrap_or(0),
                         request.nonce.unwrap_or(origin.nonce()),
@@ -764,8 +771,6 @@ impl InferenceApiServer {
                 StatusCode::FORBIDDEN,
             );
         }
-
-        info!("Node {} authenticated successfully", node_id);
 
         // Get tasks that this node can process
         let (task, node_pk_opt) = {
@@ -1562,6 +1567,31 @@ impl InferenceApiServer {
         } else {
             None
         }
+    }
+
+    /// Compute hash placeholder for encrypted data
+    /// Format: "enc:{first16bytes_of_sha256}"
+    fn compute_encrypted_hash(encrypted_data: &str) -> String {
+        use sha2::{Sha256, Digest};
+        use funai_common::util::hash::to_hex;
+        
+        let mut hasher = Sha256::new();
+        hasher.update(encrypted_data.as_bytes());
+        let hash = hasher.finalize();
+        // Take first 8 bytes (16 hex chars) for compact representation
+        let hash_hex = to_hex(&hash[..8]);
+        format!("enc:{}", hash_hex)
+    }
+    
+    /// Verify that encrypted data matches the hash placeholder
+    /// Returns true if the hash matches, false otherwise
+    #[allow(dead_code)]
+    fn verify_encrypted_hash(encrypted_data: &str, hash_placeholder: &str) -> bool {
+        if !hash_placeholder.starts_with("enc:") {
+            return false;
+        }
+        let expected = Self::compute_encrypted_hash(encrypted_data);
+        expected == hash_placeholder
     }
 
     /// Parse model type
