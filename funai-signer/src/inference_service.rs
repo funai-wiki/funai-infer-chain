@@ -649,6 +649,8 @@ pub struct InferenceServiceState {
     pub signer_public_key_hex: Option<String>,
     /// Signer's address
     pub signer_address: Option<String>,
+    /// Funai node URL for contract queries
+    pub funai_node_url: Option<String>,
 }
 
 impl InferenceServiceState {
@@ -667,6 +669,7 @@ impl InferenceServiceState {
             signer_private_key: None,
             signer_public_key_hex: None,
             signer_address: None,
+            funai_node_url: None,
         };
 
         // Load data from database

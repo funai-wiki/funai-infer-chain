@@ -85,6 +85,25 @@ pub struct RegisterNodeRequest {
     pub supported_models: Vec<String>,
     /// Node performance score (optional)
     pub performance_score: Option<f64>,
+    /// Node's Funai address (principal) for stake verification
+    pub node_address: Option<String>,
+}
+
+/// Response for stake verification
+#[derive(Serialize, Deserialize, Debug)]
+pub struct InferStakeInfo {
+    /// Whether the node is staked
+    pub is_staked: bool,
+    /// Staked amount in micro-STX
+    pub amount_ustx: Option<u128>,
+    /// Lock start block height
+    pub lock_start: Option<u64>,
+    /// Lock period in blocks
+    pub lock_period: Option<u64>,
+    /// Unlock height
+    pub unlock_height: Option<u64>,
+    /// Node ID registered on-chain
+    pub node_id: Option<String>,
 }
 
 /// Request for inference node to fetch a task (with signature authentication)
@@ -397,6 +416,42 @@ impl InferenceApiServer {
     async fn handle_register_node(&self, req: Request<Body>) -> Response<Body> {
         match self.parse_json_body::<RegisterNodeRequest>(req).await {
             Ok(request) => {
+                // Verify node stake if node_address is provided
+                if let Some(ref node_address) = request.node_address {
+                    match self.verify_infer_node_stake(node_address, &request.node_id).await {
+                        Ok(stake_info) => {
+                            if !stake_info.is_staked {
+                                return self.json_response(
+                                    ApiResponse::<String>::error(
+                                        "Node is not staked. Please stake STX using infer-stake-stx before registering.".to_string()
+                                    ),
+                                    StatusCode::FORBIDDEN,
+                                );
+                            }
+                            
+                            // Verify node_id matches on-chain registration
+                            if let Some(ref on_chain_node_id) = stake_info.node_id {
+                                if on_chain_node_id != &request.node_id {
+                                    return self.json_response(
+                                        ApiResponse::<String>::error(
+                                            format!("Node ID mismatch: on-chain='{}', request='{}'", on_chain_node_id, request.node_id)
+                                        ),
+                                        StatusCode::FORBIDDEN,
+                                    );
+                                }
+                            }
+                            
+                            info!("Node {} passed stake verification: {:?}", request.node_id, stake_info);
+                        }
+                        Err(e) => {
+                            warn!("Failed to verify stake for node {}: {}", request.node_id, e);
+                            // Allow registration but log warning - stake verification is optional for now
+                        }
+                    }
+                } else {
+                    warn!("Node {} registering without stake verification (no node_address provided)", request.node_id);
+                }
+                
                 let node = InferenceNode {
                     node_id: request.node_id.clone(),
                     endpoint: request.endpoint,
@@ -433,6 +488,113 @@ impl InferenceApiServer {
                 self.json_response(ApiResponse::<String>::error(e), StatusCode::BAD_REQUEST)
             }
         }
+    }
+    
+    /// Verify infer node stake status by querying on-chain contract
+    async fn verify_infer_node_stake(&self, node_address: &str, node_id: &str) -> Result<InferStakeInfo, String> {
+        // Get the Funai node URL from config
+        let node_url = {
+            let service = self.shared_state.lock().unwrap();
+            service.funai_node_url.clone().unwrap_or_else(|| "http://localhost:20443".to_string())
+        };
+        
+        // Call the read-only contract function infer-get-stake-info
+        let url = format!(
+            "{}/v2/contracts/call-read/ST000000000000000000002AMW42H/pox-4/infer-get-stake-info",
+            node_url
+        );
+        
+        // Build principal CV for the node address
+        // Standard principal format: 0x05 + version byte + 20 bytes hash160
+        let principal_cv = Self::encode_principal_cv(node_address)?;
+        
+        let request_body = json!({
+            "sender": node_address,
+            "arguments": [principal_cv]
+        });
+        
+        let client = reqwest::Client::new();
+        let response = client.post(&url)
+            .header("Content-Type", "application/json")
+            .json(&request_body)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to query stake info: {}", e))?;
+        
+        if !response.status().is_success() {
+            return Err(format!("Contract call failed with status: {}", response.status()));
+        }
+        
+        let result: serde_json::Value = response.json().await
+            .map_err(|e| format!("Failed to parse response: {}", e))?;
+        
+        // Parse the result
+        if let Some(okay) = result.get("okay") {
+            if okay.as_bool() == Some(true) {
+                if let Some(result_hex) = result.get("result").and_then(|v| v.as_str()) {
+                    return Self::parse_stake_info_result(result_hex);
+                }
+            }
+        }
+        
+        Err("Invalid response from contract".to_string())
+    }
+    
+    /// Encode a Funai address as a principal Clarity value (hex)
+    fn encode_principal_cv(address: &str) -> Result<String, String> {
+        use funai_common::address::c32::c32_address_decode;
+        
+        // Decode the c32 address
+        let (version, hash160) = c32_address_decode(address)
+            .map_err(|e| format!("Invalid address format: {:?}", e))?;
+        
+        if hash160.len() != 20 {
+            return Err("Invalid hash160 length".to_string());
+        }
+        
+        // Build principal CV: 0x05 (standard principal) + version + hash160
+        let mut cv = vec![0x05];
+        cv.push(version);
+        cv.extend(&hash160);
+        
+        Ok(format!("0x{}", funai_common::util::hash::to_hex(&cv)))
+    }
+    
+    /// Parse the stake info result from contract response
+    fn parse_stake_info_result(hex_result: &str) -> Result<InferStakeInfo, String> {
+        // The result is a Clarity value
+        // none = 0x09
+        // (some {...}) = 0x0a + tuple encoding
+        
+        let hex = hex_result.strip_prefix("0x").unwrap_or(hex_result);
+        
+        if hex == "09" {
+            // none - not staked
+            return Ok(InferStakeInfo {
+                is_staked: false,
+                amount_ustx: None,
+                lock_start: None,
+                lock_period: None,
+                unlock_height: None,
+                node_id: None,
+            });
+        }
+        
+        if hex.starts_with("0a") {
+            // (some {...}) - staked
+            // For now, we just return is_staked: true
+            // Full parsing of the tuple would require more complex Clarity decoding
+            return Ok(InferStakeInfo {
+                is_staked: true,
+                amount_ustx: None, // TODO: Parse from tuple
+                lock_start: None,
+                lock_period: None,
+                unlock_height: None,
+                node_id: None,
+            });
+        }
+        
+        Err(format!("Unknown result format: {}", hex))
     }
 
     /// Handle user task submission
