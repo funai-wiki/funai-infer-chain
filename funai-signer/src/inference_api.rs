@@ -456,6 +456,7 @@ impl InferenceApiServer {
                     node_id: request.node_id.clone(),
                     endpoint: request.endpoint,
                     public_key: request.public_key,
+                    address: request.node_address.clone(), // Store node address for stake verification
                     status: NodeStatus::Online,
                     supported_models: request.supported_models.into_iter()
                         .map(|model| self.parse_model_type(&model))
@@ -582,14 +583,72 @@ impl InferenceApiServer {
         
         if hex.starts_with("0a") {
             // (some {...}) - staked
-            // For now, we just return is_staked: true
-            // Full parsing of the tuple would require more complex Clarity decoding
+            // Parse the tuple to extract amount-ustx
+            // Format: 0a (some) + 0c (tuple) + field count + fields
+            // Each field: name_length + name + type_byte + value
+            
+            let mut amount_ustx: Option<u128> = None;
+            let mut lock_start: Option<u64> = None;
+            let mut lock_period: Option<u64> = None;
+            let mut unlock_height: Option<u64> = None;
+            
+            // Simple parsing: look for "amount-ustx" field pattern
+            // The tuple format after 0a0c is: 4-byte field count, then fields
+            // Each uint128 value is encoded as: 01 + 16 bytes big-endian
+            
+            // Try to find amount-ustx value by looking for the pattern
+            // "0b616d6f756e742d75737478" = length(11) + "amount-ustx"
+            // followed by "01" (uint type) + 16 bytes value
+            if let Some(pos) = hex.find("0b616d6f756e742d75737478") {
+                // After the field name, look for uint value (01 + 16 bytes = 34 hex chars)
+                let value_start = pos + 24 + 2; // 24 chars for name + 2 for type byte "01"
+                if hex.len() >= value_start + 32 {
+                    let value_hex = &hex[value_start..value_start + 32];
+                    if let Ok(value) = u128::from_str_radix(value_hex, 16) {
+                        amount_ustx = Some(value);
+                    }
+                }
+            }
+            
+            // Parse lock-start (0b6c6f636b2d7374617274 = "lock-start")
+            if let Some(pos) = hex.find("0a6c6f636b2d7374617274") {
+                let value_start = pos + 22 + 2; // 22 chars for name + 2 for type byte
+                if hex.len() >= value_start + 32 {
+                    let value_hex = &hex[value_start..value_start + 32];
+                    if let Ok(value) = u128::from_str_radix(value_hex, 16) {
+                        lock_start = Some(value as u64);
+                    }
+                }
+            }
+            
+            // Parse lock-period (0b6c6f636b2d706572696f64 = "lock-period")
+            if let Some(pos) = hex.find("0b6c6f636b2d706572696f64") {
+                let value_start = pos + 24 + 2;
+                if hex.len() >= value_start + 32 {
+                    let value_hex = &hex[value_start..value_start + 32];
+                    if let Ok(value) = u128::from_str_radix(value_hex, 16) {
+                        lock_period = Some(value as u64);
+                    }
+                }
+            }
+            
+            // Parse unlock-height (0d756e6c6f636b2d686569676874 = "unlock-height")
+            if let Some(pos) = hex.find("0d756e6c6f636b2d686569676874") {
+                let value_start = pos + 28 + 2;
+                if hex.len() >= value_start + 32 {
+                    let value_hex = &hex[value_start..value_start + 32];
+                    if let Ok(value) = u128::from_str_radix(value_hex, 16) {
+                        unlock_height = Some(value as u64);
+                    }
+                }
+            }
+            
             return Ok(InferStakeInfo {
                 is_staked: true,
-                amount_ustx: None, // TODO: Parse from tuple
-                lock_start: None,
-                lock_period: None,
-                unlock_height: None,
+                amount_ustx,
+                lock_start,
+                lock_period,
+                unlock_height,
                 node_id: None,
             });
         }
@@ -934,6 +993,42 @@ impl InferenceApiServer {
             );
         }
 
+        // Get node's registered address for stake verification
+        let node_address = {
+            let service = self.shared_state.lock().unwrap();
+            let nodes = service.inference_nodes.lock().unwrap();
+            if let Some(node) = nodes.get(&node_id) {
+                info!("Node {} has registered address: {:?}", node_id, node.address);
+                node.address.clone()
+            } else {
+                warn!("Node {} not found in registry", node_id);
+                None
+            }
+        };
+        
+        // Query node's stake amount from on-chain contract
+        let node_stake_amount: u128 = if let Some(ref addr) = node_address {
+            info!("Querying stake for node {} at address {}", node_id, addr);
+            match self.verify_infer_node_stake(addr, &node_id).await {
+                Ok(stake_info) => {
+                    info!("Stake query result for node {}: is_staked={}, amount={:?}", 
+                        node_id, stake_info.is_staked, stake_info.amount_ustx);
+                    if stake_info.is_staked {
+                        stake_info.amount_ustx.unwrap_or(0)
+                    } else {
+                        0
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to query stake for node {}: {}", node_id, e);
+                    0
+                }
+            }
+        } else {
+            warn!("Node {} has no registered address, cannot verify stake", node_id);
+            0
+        };
+        
         // Get tasks that this node can process
         let (task, node_pk_opt) = {
             let service = self.shared_state.lock().unwrap();
@@ -951,16 +1046,28 @@ impl InferenceApiServer {
             if supported_models.is_empty() {
                 (None, node_pk)
             } else {
-                // 2. Find a suitable pending task
+                // 2. Find a suitable pending task that the node has enough stake for
                 let mut found_task_id = None;
                 {
                     let pending = service.pending_tasks.lock().unwrap();
                     for (id, task) in pending.iter() {
                         // Check if the node supports the task's model type
-                        if supported_models.contains(&task.model_type) {
-                            found_task_id = Some(id.clone());
-                            break;
+                        if !supported_models.contains(&task.model_type) {
+                            continue;
                         }
+                        
+                        // Check if the node has enough stake (must be >= 3x infer_fee)
+                        let required_stake = task.infer_fee as u128 * 3;
+                        if node_stake_amount < required_stake {
+                            info!(
+                                "Node {} has insufficient stake for task {}: stake={}, required={} (3x infer_fee={})",
+                                node_id, id, node_stake_amount, required_stake, task.infer_fee
+                            );
+                            continue;
+                        }
+                        
+                        found_task_id = Some(id.clone());
+                        break;
                     }
                 }
 
@@ -979,6 +1086,11 @@ impl InferenceApiServer {
                                 error!("Failed to save task to database: {}", e);
                             }
                         }
+                        
+                        info!(
+                            "Assigned task {} to node {} (stake={}, infer_fee={}, required={})",
+                            task_id, node_id, node_stake_amount, task.infer_fee, task.infer_fee as u128 * 3
+                        );
                         
                         (Some(task), node_pk)
                     } else {

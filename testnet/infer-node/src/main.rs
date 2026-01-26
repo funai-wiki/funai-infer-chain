@@ -118,12 +118,15 @@ async fn register_with_signer(client: &reqwest::Client, config: &Config) -> Resu
     priv_key.set_compress_public(true);
     let pub_key = FunaiPublicKey::from_private(&priv_key);
     let pub_key_hex = pub_key.to_hex();
+    
+    info!("Registering node with address: {} for stake verification", config.node_address);
 
     let body = serde_json::json!({
         "node_id": config.node_id,
         "endpoint": config.endpoint,
         "public_key": pub_key_hex,
         "supported_models": config.supported_models,
+        "node_address": config.node_address,
     });
 
     // Retry registration with exponential backoff

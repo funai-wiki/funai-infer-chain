@@ -248,6 +248,8 @@ pub struct InferenceNode {
     pub endpoint: String,
     /// Node public key
     pub public_key: String,
+    /// Node Funai address (principal) for stake verification
+    pub address: Option<String>,
     /// Node status
     pub status: NodeStatus,
     /// Supported model types
@@ -347,10 +349,14 @@ impl InferenceDatabase {
                 status TEXT NOT NULL,
                 supported_models TEXT NOT NULL,
                 performance_score REAL NOT NULL,
-                last_heartbeat INTEGER NOT NULL
+                last_heartbeat INTEGER NOT NULL,
+                address TEXT
             )",
             [],
         )?;
+        
+        // Migration: Add address column if it doesn't exist
+        let _ = conn.execute::<[&dyn rusqlite::ToSql; 0]>("ALTER TABLE inference_nodes ADD COLUMN address TEXT", []);
 
         Ok(Self { conn })
     }
@@ -496,8 +502,8 @@ impl InferenceDatabase {
 
         self.conn.execute(
             "INSERT OR REPLACE INTO inference_nodes 
-             (node_id, endpoint, public_key, status, supported_models, performance_score, last_heartbeat)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+             (node_id, endpoint, public_key, status, supported_models, performance_score, last_heartbeat, address)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             params![
                 node.node_id,
                 node.endpoint,
@@ -506,6 +512,7 @@ impl InferenceDatabase {
                 supported_models_str,
                 node.performance_score,
                 node.last_heartbeat as i64,
+                node.address,
             ],
         )?;
 
@@ -516,7 +523,7 @@ impl InferenceDatabase {
     pub fn load_nodes(&self) -> SqliteResult<Vec<InferenceNode>> {
         let mut stmt = self.conn.prepare(
             "SELECT node_id, endpoint, public_key, status, supported_models, 
-                    performance_score, last_heartbeat
+                    performance_score, last_heartbeat, address
              FROM inference_nodes"
         )?;
 
@@ -531,6 +538,7 @@ impl InferenceDatabase {
             let supported_models_str: String = row.get(4)?;
             let performance_score: f64 = row.get(5)?;
             let last_heartbeat: i64 = row.get(6)?;
+            let address: Option<String> = row.get(7).ok();
 
             let status = NodeStatus::from_string(&status_str);
             let supported_models: Vec<InferModelType> = serde_json::from_str(&supported_models_str)
@@ -540,6 +548,7 @@ impl InferenceDatabase {
                 node_id,
                 endpoint,
                 public_key,
+                address,
                 status,
                 supported_models,
                 performance_score,
