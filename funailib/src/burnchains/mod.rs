@@ -450,7 +450,7 @@ impl PoxConstants {
 
     pub fn testnet_default() -> PoxConstants {
         PoxConstants::new(
-            5,
+            10,
             3,
             2,
             3333333333333333,

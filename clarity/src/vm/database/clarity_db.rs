@@ -713,7 +713,7 @@ impl<'a> ClarityDatabase<'a> {
         contract_identifier: &QualifiedContractIdentifier,
     ) -> Result<u64> {
         let key = ClarityDatabase::make_metadata_key(StoreType::Contract, "contract-size");
-        info!("key: {}", key);
+        debug!("key: {}", key);
         let contract_size: u64 =
             self.fetch_metadata(contract_identifier, &key)?
                 .ok_or_else(|| {
@@ -721,7 +721,7 @@ impl<'a> ClarityDatabase<'a> {
             "Failed to read non-consensus contract metadata, even though contract exists in MARF."
         .into())
                 })?;
-        info!("contract_size: {}", contract_size);
+        debug!("contract_size: {}", contract_size);
         let key = ClarityDatabase::make_metadata_key(StoreType::Contract, "contract-data-size");
         let data_size: u64 = self
             .fetch_metadata(contract_identifier, &key)?

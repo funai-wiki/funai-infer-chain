@@ -140,10 +140,11 @@ impl BlockMinerThread {
     pub fn run_miner(mut self, prior_miner: Option<JoinHandle<()>>) {
         // when starting a new tenure, block the mining thread if its currently running.
         // the new mining thread will join it (so that the new mining thread stalls, not the relayer)
-        debug!(
+        info!(
             "New miner thread starting";
             "had_prior_miner" => prior_miner.is_some(),
             "parent_tenure_id" => %self.parent_tenure_id,
+            "burn_height" => self.burn_block.block_height,
             "thread_id" => ?thread::current().id(),
         );
         if let Some(prior_miner) = prior_miner {

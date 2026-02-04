@@ -552,13 +552,16 @@ impl ConversationHttp {
                         |conv_http, req| conv_http.handle_request(req, node),
                     )?;
 
-                    info!("Handled FunaiHTTPRequest";
-                           "verb" => %verb,
-                           "path" => %request_path,
-                           "processing_time_ms" => start_time.elapsed().as_millis(),
-                           "latency_ms" => latency,
-                           "conn_id" => self.conn_id,
-                           "peer_addr" => &self.peer_addr);
+                    // Skip logging for frequently called endpoints to reduce log noise
+                    if !request_path.contains("infer-get-stake-info") {
+                        info!("Handled FunaiHTTPRequest";
+                               "verb" => %verb,
+                               "path" => %request_path,
+                               "processing_time_ms" => start_time.elapsed().as_millis(),
+                               "latency_ms" => latency,
+                               "conn_id" => self.conn_id,
+                               "peer_addr" => &self.peer_addr);
+                    }
 
                     if let Some(msg) = msg_opt {
                         ret.push(msg);

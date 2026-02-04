@@ -1150,7 +1150,12 @@ impl<'a, 'b, 'hooks> Environment<'a, 'b, 'hooks> {
             }
             self.call_stack.insert(&func_identifier, true);
             let res = self.execute_function_as_transaction(&func, &args, Some(&contract.contract_context), allow_private);
-            info!("Executed contract function: {}", func_identifier.to_string());
+            let func_id_str = func_identifier.to_string();
+            // Skip logging for frequently called endpoints to reduce log noise
+            let skip_logging = func_id_str.contains("infer-get-stake-info");
+            if !skip_logging {
+                info!("Executed contract function: {}", func_id_str);
+            }
             self.call_stack.remove(&func_identifier, true)?;
 
             match res {
@@ -1166,7 +1171,9 @@ impl<'a, 'b, 'hooks> Environment<'a, 'b, 'hooks> {
                             &value
                         )?;
                     }
-                    info!("value: {:?}", value);
+                    if !skip_logging {
+                        info!("value: {:?}", value);
+                    }
                     Ok(value)
                 },
                 Err(e) => Err(e)

@@ -1272,17 +1272,22 @@ impl Signer {
         if packet.verify(&self.state_machine.public_keys, coordinator_public_key) {
             match &mut packet.msg {
                 Message::SignatureShareRequest(request) => {
+                    info!("{self}: Received SignatureShareRequest from miner");
                     if !self.validate_signature_share_request(request) {
+                        warn!("{self}: SignatureShareRequest validation failed");
                         return None;
                     }
+                    info!("{self}: SignatureShareRequest validated successfully");
                 }
                 Message::NonceRequest(request) => {
+                    info!("{self}: Received NonceRequest from miner, validating...");
                     let Some(updated_block_info) =
                         self.validate_nonce_request(funai_client, request)
                     else {
-                        warn!("Failed to validate and parse nonce request");
+                        warn!("{self}: Failed to validate and parse nonce request");
                         return None;
                     };
+                    info!("{self}: NonceRequest validated, vote = {:?}", updated_block_info.vote);
                     self.signer_db
                         .insert_block(self.reward_cycle, &updated_block_info)
                         .expect(&format!("{self}: Failed to insert block in DB"));
@@ -1340,6 +1345,7 @@ impl Signer {
 
     /// Process a dkg result by broadcasting a vote to the funai node
     fn process_dkg(&mut self, funai_client: &FunaiClient, dkg_public_key: &Point) {
+        info!("{self}: DKG completed successfully, setting aggregate public key: {dkg_public_key}");
         let mut dkg_results_bytes = vec![];
         if let Err(e) = SignerMessage::serialize_dkg_result(
             &mut dkg_results_bytes,
@@ -1663,9 +1669,10 @@ impl Signer {
             outbound_messages.len()
         );
         for msg in outbound_messages {
+            info!("{self}: Sending message type: {:?}", std::mem::discriminant(&msg.msg));
             let ack = self.funaidb.send_message_with_retry(msg.into());
             if let Ok(ack) = ack {
-                debug!("{self}: send outbound ACK: {ack:?}");
+                info!("{self}: send outbound ACK: {ack:?}");
             } else {
                 warn!("{self}: Failed to send message to funai-db instance: {ack:?}");
             }

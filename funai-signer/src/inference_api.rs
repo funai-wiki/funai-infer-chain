@@ -998,7 +998,7 @@ impl InferenceApiServer {
             let service = self.shared_state.lock().unwrap();
             let nodes = service.inference_nodes.lock().unwrap();
             if let Some(node) = nodes.get(&node_id) {
-                info!("Node {} has registered address: {:?}", node_id, node.address);
+                debug!("Node {} has registered address: {:?}", node_id, node.address);
                 node.address.clone()
             } else {
                 warn!("Node {} not found in registry", node_id);
@@ -1008,10 +1008,10 @@ impl InferenceApiServer {
         
         // Query node's stake amount from on-chain contract
         let node_stake_amount: u128 = if let Some(ref addr) = node_address {
-            info!("Querying stake for node {} at address {}", node_id, addr);
+            debug!("Querying stake for node {} at address {}", node_id, addr);
             match self.verify_infer_node_stake(addr, &node_id).await {
                 Ok(stake_info) => {
-                    info!("Stake query result for node {}: is_staked={}, amount={:?}", 
+                    debug!("Stake query result for node {}: is_staked={}, amount={:?}", 
                         node_id, stake_info.is_staked, stake_info.amount_ustx);
                     if stake_info.is_staked {
                         stake_info.amount_ustx.unwrap_or(0)

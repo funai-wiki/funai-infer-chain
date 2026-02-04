@@ -380,13 +380,13 @@ lazy_static! {
         FunaiEpoch {
             epoch_id: FunaiEpochId::Epoch25,
             start_height: 60,
-            end_height: 1001,
+            end_height: 141,
             block_limit: BLOCK_LIMIT_MAINNET_21.clone(),
             network_epoch: PEER_VERSION_EPOCH_2_5
         },
         FunaiEpoch {
             epoch_id: FunaiEpochId::Epoch30,
-            start_height: 1001,
+            start_height: 141,
             end_height: STACKS_EPOCH_MAX,
             block_limit: BLOCK_LIMIT_MAINNET_21.clone(),
             network_epoch: PEER_VERSION_EPOCH_3_0
@@ -448,13 +448,13 @@ lazy_static! {
         FunaiEpoch {
             epoch_id: FunaiEpochId::Epoch25,
             start_height: 60,
-            end_height: 127,
+            end_height: 141,
             block_limit: BLOCK_LIMIT_MAINNET_21.clone(),
             network_epoch: PEER_VERSION_EPOCH_2_5
         },
         FunaiEpoch {
             epoch_id: FunaiEpochId::Epoch30,
-            start_height: 127,
+            start_height: 141,
             end_height: STACKS_EPOCH_MAX,
             block_limit: BLOCK_LIMIT_MAINNET_21.clone(),
             network_epoch: PEER_VERSION_EPOCH_3_0
