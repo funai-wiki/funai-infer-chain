@@ -74,16 +74,55 @@ impl GetFunaisResponse {
         }
 
         let provider = OnChainRewardSetProvider::new();
-        let funai_set = provider.read_reward_set_nakamoto(
+        let funai_set = match provider.read_reward_set_nakamoto(
             cycle_start_height,
             chainstate,
             burnchain,
             sortdb,
             tip,
             true,
-        ).map_err(
-            |e| format!("Could not read reward set. Prepare phase may not have started for this cycle yet. Cycle = {cycle_number}, Err = {e:?}")
-        )?;
+        ) {
+            Ok(rs) => rs,
+            Err(initial_err) => {
+                // FALLBACK: The reward set for the target cycle may not have been written
+                // to .signers (e.g., if no Stacks block was processed during the prepare phase).
+                // Walk backwards through previous cycles until we find a valid reward set.
+                // This ensures signers can still register even after multi-cycle gaps.
+                let mut fallback_rs = None;
+                for delta in 1..=cycle_number {
+                    let prev_cycle = cycle_number - delta;
+                    let prev_cycle_start = burnchain.reward_cycle_to_block_height(prev_cycle);
+                    match provider.read_reward_set_nakamoto(
+                        prev_cycle_start,
+                        chainstate,
+                        burnchain,
+                        sortdb,
+                        tip,
+                        true,
+                    ) {
+                        Ok(rs) => {
+                            warn!(
+                                "Could not read reward set for cycle {cycle_number}, \
+                                 using cycle {prev_cycle} as fallback \
+                                 (looked back {delta} cycle(s))"
+                            );
+                            fallback_rs = Some(rs);
+                            break;
+                        }
+                        Err(_) => continue,
+                    }
+                }
+                match fallback_rs {
+                    Some(rs) => rs,
+                    None => {
+                        return Err(format!(
+                            "Could not read reward set for cycle {cycle_number} or any \
+                             previous cycle. Err = {initial_err:?}"
+                        ));
+                    }
+                }
+            }
+        };
 
         Ok(Self { funai_set })
     }
