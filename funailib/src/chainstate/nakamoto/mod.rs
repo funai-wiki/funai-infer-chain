@@ -506,11 +506,18 @@ impl NakamotoBlockHeader {
         Ok(())
     }
 
-    /// Verify the block header against an aggregate public key
+    /// Verify the block header against an aggregate public key.
+    /// The signers sign a NakamotoBlockVote (serialized vote bytes), not the raw signer_signature_hash.
     pub fn verify_signer(&self, signer_aggregate: &Point) -> bool {
         let schnorr_signature = &self.signer_signature.0;
-        let message = self.signer_signature_hash().0;
-        schnorr_signature.verify(signer_aggregate, &message)
+        // Construct the NakamotoBlockVote that signers would have signed for an accepted block
+        let accept_vote = NakamotoBlockVote {
+            signer_signature_hash: self.signer_signature_hash(),
+            rejected: false,
+            invalid_transactions: None,
+        };
+        let vote_bytes = accept_vote.serialize_to_vec();
+        schnorr_signature.verify(signer_aggregate, &vote_bytes)
     }
 
     /// Make an "empty" header whose block data needs to be filled in.
@@ -1758,11 +1765,21 @@ impl NakamotoChainState {
             return Ok(false);
         };
 
+        // The signers sign a NakamotoBlockVote (not the raw signer_signature_hash).
+        // Construct the expected accept vote to get the correct verification message.
+        let block_sighash = block.header.signer_signature_hash();
+        let accept_vote = NakamotoBlockVote {
+            signer_signature_hash: block_sighash,
+            rejected: false,
+            invalid_transactions: None,
+        };
+        let vote_bytes = accept_vote.serialize_to_vec();
+
         let schnorr_signature = &block.header.signer_signature.0;
         if !db_handle.expects_signer_signature(
             &block.header.consensus_hash,
             schnorr_signature,
-            &block.header.signer_signature_hash().0,
+            &vote_bytes,
             aggregate_public_key,
         )? {
             let msg = format!(

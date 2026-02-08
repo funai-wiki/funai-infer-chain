@@ -336,14 +336,47 @@ impl BlockMinerThread {
             }
         }
 
+        // Determine the miner's message slot in the miners StackerDB.
+        // Each miner gets 2 consecutive slots: slot_range.start for block proposals,
+        // slot_range.start + 1 for signing round messages (nonce requests, etc.)
+        let miner_pubkey = funai_common::types::chainstate::FunaiPublicKey::from_private(&miner_privkey);
+        let miner_slot_range = NakamotoChainState::get_miner_slot(&sort_db, &tip, &miner_pubkey)
+            .map_err(|e| {
+                NakamotoNodeError::SigningCoordinatorFailure(format!(
+                    "Failed to get miner slot range: {e:?}"
+                ))
+            })?
+            .ok_or_else(|| {
+                NakamotoNodeError::SigningCoordinatorFailure(
+                    "Miner is not in the miners StackerDB config. Cannot send signing messages!".into(),
+                )
+            })?;
+        let message_slot_id = miner_slot_range.start + 1;
+
+        // Get the latest slot version from the DB to avoid StaleChunk rejections
+        let miners_contract_id = boot_code_id(MINERS_NAME, self.config.is_mainnet());
+        let initial_slot_version = funaidbs
+            .get_slot_version(&miners_contract_id, message_slot_id)
+            .unwrap_or(Some(0))
+            .unwrap_or(0)
+            .saturating_add(1);
+
+        info!(
+            "Miner signing coordinator: using message_slot_id={}, initial_slot_version={}",
+            message_slot_id, initial_slot_version
+        );
+
         let miner_privkey_as_scalar = Scalar::from(miner_privkey.as_slice().clone());
         let mut coordinator = SignCoordinator::new(
             &reward_set,
             reward_cycle,
             miner_privkey_as_scalar,
+            miner_privkey,
             aggregate_public_key,
             &funaidbs,
             &self.config,
+            message_slot_id,
+            initial_slot_version,
         )
         .map_err(|e| {
             NakamotoNodeError::SigningCoordinatorFailure(format!(

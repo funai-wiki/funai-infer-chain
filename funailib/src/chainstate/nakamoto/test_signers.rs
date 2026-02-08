@@ -136,7 +136,14 @@ impl TestSigners {
         }
 
         let mut rng = rand_core::OsRng;
-        let msg = block.header.signer_signature_hash().0;
+        // Sign the NakamotoBlockVote bytes, matching what the real signer does
+        let accept_vote = super::NakamotoBlockVote {
+            signer_signature_hash: block.header.signer_signature_hash(),
+            rejected: false,
+            invalid_transactions: None,
+        };
+        use funai_common::codec::FunaiMessageCodec;
+        let msg = accept_vote.serialize_to_vec();
         let (nonces, sig_shares, key_ids) =
             wsts::v2::test_helpers::sign(msg.as_slice(), &mut self.signer_parties, &mut rng);
 
