@@ -666,6 +666,19 @@ impl Signer {
             debug!("{self}: Received a block validate response from the funai node for a block we already received a nonce request for. Responding to the nonce request...");
             // We have received validation from the funai node. Determine our vote and update the request message
             self.determine_vote(&mut block_info, &mut nonce_request);
+            // Persist the updated block_info (with vote) to DB immediately.
+            // This is critical: when the miner later sends a SignatureShareRequest,
+            // validate_signature_share_request() loads block_info from DB and checks
+            // block_info.vote. Without this save, the vote would remain None in DB
+            // and the SignatureShareRequest would be rejected.
+            self.signer_db
+                .insert_block(self.reward_cycle, &block_info)
+                .unwrap_or_else(|_| panic!("{self}: Failed to insert block with vote in DB"));
+            info!(
+                "{self}: Saved block vote to DB after deferred validation";
+                "signer_sighash" => %block_info.block.header.signer_signature_hash(),
+                "vote_rejected" => block_info.vote.as_ref().map(|v| v.rejected),
+            );
             // Send the nonce request through with our vote
             let packet = Packet {
                 msg: Message::NonceRequest(nonce_request),
