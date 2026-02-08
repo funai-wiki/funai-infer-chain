@@ -721,6 +721,18 @@ impl<
             debug!("Process next reward cycle's sortitions");
             self.handle_new_nakamoto_burnchain_block()?;
             debug!("Processed next reward cycle's sortitions");
+
+            // After processing burn blocks, try to compute and store the reward set if not
+            // already stored. This handles the case where burn blocks were processed before
+            // any Funai block existed for the prepare phase sortitions.
+            let reward_cycle_info = self.get_nakamoto_reward_cycle_info(funai_sn.block_height)?;
+            if let Some(rc_info) = reward_cycle_info {
+                info!(
+                    "Reward cycle info is now available after processing Funai block";
+                    "reward_cycle" => rc_info.reward_cycle,
+                    "anchor_status" => ?rc_info.anchor_status
+                );
+            }
         }
 
         // no PoX anchor block found

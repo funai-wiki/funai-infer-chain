@@ -175,7 +175,11 @@
             reward-cycle: reward-cycle,
             round: round,
             key: key,
+            signer-weight: signer-weight,
             new-total: new-total,
+            threshold-weight: threshold-weight,
+            cached-total-weight: cached-weight,
+            will-approve: (>= new-total threshold-weight)
         })
         ;; If the new total weight is greater than or equal to the threshold consensus
         (if (>= new-total threshold-weight)

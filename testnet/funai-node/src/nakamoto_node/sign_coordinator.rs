@@ -30,7 +30,7 @@ use funai::chainstate::funai::{Error as ChainstateError, ThresholdSignature};
 use funai::libfunaidb::FunaiDBChunkData;
 use funai::net::funaidb::FunaiDBs;
 use funai::util_lib::boot::boot_code_id;
-use funai_common::codec::FunaiMessageCodec;
+use funai_common::codec::{read_next, FunaiMessageCodec};
 use funai_common::types::chainstate::{FunaiPrivateKey, FunaiPublicKey};
 use wsts::common::PolyCommitment;
 use wsts::curve::ecdsa;
@@ -52,12 +52,15 @@ static EVENT_RECEIVER_POLL: Duration = Duration::from_millis(50);
 pub struct SignCoordinator {
     coordinator: FireCoordinator<Aggregator>,
     message_key: Scalar,
+    stacks_private_key: FunaiPrivateKey,
     receiver: Option<Receiver<FunaiDBChunksEvent>>,
     wsts_public_keys: PublicKeys,
     is_mainnet: bool,
     miners_session: FunaiDBSession,
     signing_round_timeout: Duration,
     reward_cycle: u64,
+    message_slot_id: u32,
+    slot_version: u32,
 }
 
 impl SignCoordinator {
@@ -70,9 +73,12 @@ impl SignCoordinator {
         reward_set: &RewardSet,
         reward_cycle: u64,
         message_key: Scalar,
+        stacks_private_key: FunaiPrivateKey,
         aggregate_public_key: Point,
         funaidb_conn: &FunaiDBs,
         config: &Config,
+        message_slot_id: u32,
+        initial_slot_version: u32,
     ) -> Result<Self, ChainstateError> {
         let is_mainnet = config.is_mainnet();
         let Some(ref reward_set_signers) = reward_set.signers else {
@@ -130,12 +136,15 @@ impl SignCoordinator {
         Ok(Self {
             coordinator,
             message_key,
+            stacks_private_key,
             receiver: Some(receiver),
             wsts_public_keys: signer_entries.public_keys,
             is_mainnet,
             miners_session,
             signing_round_timeout: config.miner.wait_on_signers.clone(),
             reward_cycle,
+            message_slot_id,
+            slot_version: initial_slot_version,
         })
     }
 
@@ -147,7 +156,9 @@ impl SignCoordinator {
     }
 
     fn send_signers_message(
-        message_key: &Scalar,
+        private_key: &FunaiPrivateKey,
+        slot_version: &mut u32,
+        message_slot_id: u32,
         sortdb: &SortitionDB,
         tip: &BlockSnapshot,
         _funaidbs: &FunaiDBs,
@@ -162,18 +173,27 @@ impl SignCoordinator {
             .map_err(|e| format!("Failed to serialize message: {e:?}"))?;
 
         let mut chunk = FunaiDBChunkData::new(
-            1, // message slot
-            1, // version
+            message_slot_id,
+            *slot_version,
             msg_bytes,
         );
-        
-        // Miner key is not FunaiPrivateKey, we need to convert or handle signing
-        // For now, use a dummy sign or fix this later
-        // let _ = chunk.sign(message_key); 
 
-        miners_session
+        chunk
+            .sign(private_key)
+            .map_err(|e| format!("Failed to sign FunaiDB chunk: {e:?}"))?;
+
+        let ack = miners_session
             .put_chunk(&chunk)
             .map_err(|e| format!("Failed to send message to FunaiDB: {e:?}"))?;
+
+        if !ack.accepted {
+            return Err(format!(
+                "FunaiDB chunk was not accepted (slot_version={}): {:?}",
+                *slot_version, ack.reason
+            ));
+        }
+
+        *slot_version = slot_version.saturating_add(1);
 
         Ok(())
     }
@@ -205,7 +225,9 @@ impl SignCoordinator {
                 ))
             })?;
         Self::send_signers_message(
-            &self.message_key,
+            &self.stacks_private_key,
+            &mut self.slot_version,
+            self.message_slot_id,
             sortdb,
             burn_tip,
             &funaidbs,
@@ -317,8 +339,10 @@ impl SignCoordinator {
                             return Ok(signature);
                         }
 
-                        // Try to verify as a NakamotoBlockVote (accept or reject)
-                        use funai_common::util::hash::Sha512Trunc256Sum;
+                        // Try to verify as a NakamotoBlockVote (accept or reject).
+                        // The signer substitutes the WSTS message with the raw serialized
+                        // NakamotoBlockVote bytes, so we must verify against those same
+                        // raw bytes (not a hash of them).
                         
                         // Check for Accept vote
                         let accept_vote = NakamotoBlockVote {
@@ -327,10 +351,9 @@ impl SignCoordinator {
                             invalid_transactions: None,
                         };
                         let accept_bytes = accept_vote.serialize_to_vec();
-                        let accept_hash = Sha512Trunc256Sum::from_data(&accept_bytes);
                         if signature.verify(
                             self.coordinator.aggregate_public_key.as_ref().unwrap(),
-                            &accept_hash.0,
+                            &accept_bytes,
                         ) {
                             return Ok(ThresholdSignature(signature));
                         }
@@ -342,10 +365,9 @@ impl SignCoordinator {
                             invalid_transactions: None,
                         };
                         let reject_bytes = reject_vote.serialize_to_vec();
-                        let reject_hash = Sha512Trunc256Sum::from_data(&reject_bytes);
                         if signature.verify(
                             self.coordinator.aggregate_public_key.as_ref().unwrap(),
-                            &reject_hash.0,
+                            &reject_bytes,
                         ) {
                             warn!("Signers REJECTED the block via NakamotoBlockVote");
                             return Err(NakamotoNodeError::SignerSignatureError(
@@ -361,10 +383,9 @@ impl SignCoordinator {
                                 invalid_transactions: Some(invalid_txs.clone()),
                             };
                             let filter_bytes = filter_vote.serialize_to_vec();
-                            let filter_hash = Sha512Trunc256Sum::from_data(&filter_bytes);
                             if signature.verify(
                                 self.coordinator.aggregate_public_key.as_ref().unwrap(),
-                                &filter_hash.0,
+                                &filter_bytes,
                             ) {
                                 warn!("Signers agreed on FILTERING the block: {:?}", invalid_txs);
                                 return Err(NakamotoNodeError::SignerFilterError(invalid_txs.clone()));
@@ -390,7 +411,9 @@ impl SignCoordinator {
             }
             for msg in outbound_msgs {
                 match Self::send_signers_message(
-                    &self.message_key,
+                    &self.stacks_private_key,
+                    &mut self.slot_version,
+                    self.message_slot_id,
                     sortdb,
                     burn_tip,
                     funaidbs,
@@ -481,17 +504,65 @@ impl NakamotoSigningParams {
 }
 
 fn get_signer_commitments(
-    _is_mainnet: bool,
-    signers: &[NakamotoSignerEntry],
-    _funaidb_conn: &FunaiDBs,
-    _reward_cycle: u64,
-    _aggregate_public_key: &Point,
-) -> Result<HashMap<u32, PolyCommitment>, ChainstateError> {
-    let mut party_polynomials = HashMap::new();
-    for (i, _entry) in signers.iter().enumerate() {
-        let _signer_id = i as u32;
-        // In a real implementation, we would fetch these from FunaiDB
-        // For now, we assume we have them or they are not needed for initial signing round
+    is_mainnet: bool,
+    reward_set: &[NakamotoSignerEntry],
+    funaidbs: &FunaiDBs,
+    reward_cycle: u64,
+    expected_aggregate_key: &Point,
+) -> Result<Vec<(u32, PolyCommitment)>, ChainstateError> {
+    let commitment_contract =
+        MessageSlotID::DkgResults.funai_db_contract(is_mainnet, reward_cycle);
+    let signer_set_len = u32::try_from(reward_set.len())
+        .map_err(|_| ChainstateError::InvalidFunaiBlock("Reward set length exceeds u32".into()))?;
+    for signer_id in 0..signer_set_len {
+        let Some(signer_data) = funaidbs.get_latest_chunk(&commitment_contract, signer_id)?
+        else {
+            warn!(
+                "Failed to fetch DKG result, will look for results from other signers.";
+                "signer_id" => signer_id
+            );
+            continue;
+        };
+        let Ok(SignerMessage::DkgResults {
+                   aggregate_key,
+                   party_polynomials,
+               }) = SignerMessage::consensus_deserialize(&mut signer_data.as_slice())
+        else {
+            warn!(
+                "Failed to parse DKG result, will look for results from other signers.";
+                "signer_id" => signer_id,
+            );
+            continue;
+        };
+
+        if &aggregate_key != expected_aggregate_key {
+            warn!(
+                "Aggregate key in DKG results does not match expected, will look for results from other signers.";
+                "expected" => %expected_aggregate_key,
+                "reported" => %aggregate_key,
+            );
+            continue;
+        }
+        let computed_key = party_polynomials
+            .iter()
+            .fold(Point::default(), |s, (_, comm)| s + comm.poly[0]);
+
+        if expected_aggregate_key != &computed_key {
+            warn!(
+                "Aggregate key computed from DKG results does not match expected, will look for results from other signers.";
+                "expected" => %expected_aggregate_key,
+                "computed" => %computed_key,
+            );
+            continue;
+        }
+
+        return Ok(party_polynomials);
     }
-    Ok(party_polynomials)
+    error!(
+        "No valid DKG results found for the active signing set, cannot coordinate a group signature";
+        "reward_cycle" => reward_cycle,
+    );
+    Err(ChainstateError::InvalidFunaiBlock(
+        "Failed to fetch DKG results for the active signer set".into(),
+    ))
 }

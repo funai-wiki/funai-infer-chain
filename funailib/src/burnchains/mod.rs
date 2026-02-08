@@ -450,9 +450,9 @@ impl PoxConstants {
 
     pub fn testnet_default() -> PoxConstants {
         PoxConstants::new(
-            10,
-            3,
-            2,
+            20,  // reward_cycle_length: 20 blocks per cycle (was 10)
+            5,   // prepare_length: 5 blocks for prepare phase / DKG (was 3)
+            3,   // anchor_threshold: must be > prepare_length/2 AND <= prepare_length
             3333333333333333,
             1,
             BITCOIN_REGTEST_FIRST_BLOCK_HEIGHT + POX_SUNSET_START,
@@ -466,9 +466,9 @@ impl PoxConstants {
 
     pub fn regtest_default() -> PoxConstants {
         PoxConstants::new(
-            5,
-            3,
-            2,
+            50,  // reward_cycle_length: 50 blocks per cycle (was 5)
+            10,  // prepare_length: 10 blocks for prepare phase / DKG (was 3)
+            6,   // anchor_threshold: must be > prepare_length / 2
             3333333333333333,
             1,
             BITCOIN_REGTEST_FIRST_BLOCK_HEIGHT + POX_SUNSET_START,
