@@ -274,7 +274,7 @@ pub fn get_nakamoto_reward_cycle_info<U: RewardSetProvider>(
 
     // iterate over the prepare_phase_sortitions, finding the first such sortition
     //  with a processed funai block
-    let Some(anchor_block_header) = prepare_phase_sortitions
+    let anchor_block_header = match prepare_phase_sortitions
         .into_iter()
         .find_map(|sn| {
             if !sn.sortition {
@@ -304,11 +304,28 @@ pub fn get_nakamoto_reward_cycle_info<U: RewardSetProvider>(
             }
         })
         // if there was a chainstate error during the lookup, yield the error
-        .transpose()? else {
-            // no funai block known yet
-            info!("No PoX anchor block known yet for cycle {reward_cycle}");
-            return Ok(None)
-        };
+        .transpose()?
+    {
+        Some(header) => header,
+        None => {
+            // FALLBACK: No Stacks block found in any prepare phase sortition.
+            // Fall back to the canonical Stacks block as the anchor block.
+            warn!(
+                "No prepare-phase anchor block for cycle {reward_cycle}; \
+                 attempting fallback to canonical Stacks tip"
+            );
+            match NakamotoChainState::get_canonical_block_header(
+                chain_state.db(),
+                sort_db,
+            )? {
+                Some(canonical_header) => canonical_header,
+                None => {
+                    info!("No canonical Stacks block found; cannot proceed");
+                    return Ok(None);
+                }
+            }
+        }
+    };
 
     let anchor_block_sn = SortitionDB::get_block_snapshot_consensus(
         sort_db.conn(),
@@ -341,13 +358,45 @@ pub fn get_nakamoto_reward_cycle_info<U: RewardSetProvider>(
         "first_prepare_sortition_id" => %first_sortition_id
     );
 
-    let reward_set = provider.get_reward_set_nakamoto(
+    let reward_set = match provider.get_reward_set_nakamoto(
         reward_start_height,
         chain_state,
         burnchain,
         sort_db,
         &block_id,
-    )?;
+    ) {
+        Ok(rs) => rs,
+        Err(initial_err) => {
+            // FALLBACK: Walk backwards through previous cycles to find a valid reward set.
+            let mut fallback_rs = None;
+            for delta in 1..=reward_cycle {
+                let prev_cycle = reward_cycle - delta;
+                let prev_cycle_start = burnchain.reward_cycle_to_block_height(prev_cycle);
+                match provider.get_reward_set_nakamoto(
+                    prev_cycle_start,
+                    chain_state,
+                    burnchain,
+                    sort_db,
+                    &block_id,
+                ) {
+                    Ok(rs) => {
+                        warn!(
+                            "Failed to read reward set for cycle {reward_cycle}, \
+                             using cycle {prev_cycle} reward set as fallback \
+                             (looked back {delta} cycle(s))"
+                        );
+                        fallback_rs = Some(rs);
+                        break;
+                    }
+                    Err(_) => continue,
+                }
+            }
+            match fallback_rs {
+                Some(rs) => rs,
+                None => return Err(initial_err),
+            }
+        }
+    };
     debug!(
         "Funai anchor block (ch {}) {} cycle {} is processed",
         &anchor_block_header.consensus_hash, &block_id, reward_cycle

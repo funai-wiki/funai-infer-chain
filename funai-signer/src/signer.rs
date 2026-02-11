@@ -186,6 +186,8 @@ pub struct Signer {
     pub signer_db: SignerDb,
     /// Supported model names for inference validation
     pub support_models: Vec<String>,
+    /// Whether DKG has been completed for this signer instance (i.e., WSTS Party has private keys)
+    pub has_dkg_keys: bool,
     /// The Funai private key for signing requests
     pub funai_private_key: funai_common::types::chainstate::FunaiPrivateKey,
     /// Channel to send inference tasks to the inference service
@@ -293,16 +295,33 @@ impl From<SignerConfig> for Signer {
             signer_config.signer_entries.public_keys,
         );
 
-        if let Some(state) = signer_db
-            .get_signer_state(signer_config.reward_cycle)
-            .expect("Failed to load signer state")
-        {
-            debug!(
-                "Reward cycle #{} Signer #{}: Loading signer",
-                signer_config.reward_cycle, signer_config.signer_id
-            );
-            state_machine.signer = v2::Signer::load(&state);
-        }
+        let has_dkg_keys = match signer_db.get_signer_state(signer_config.reward_cycle) {
+            Ok(Some(state)) => {
+                debug!(
+                    "Reward cycle #{} Signer #{}: Loading signer",
+                    signer_config.reward_cycle, signer_config.signer_id
+                );
+                // Check if the saved state has DKG private keys
+                let has_keys = state.parties.iter().any(|(_, ps)| !ps.private_keys.is_empty());
+                state_machine.signer = v2::Signer::load(&state);
+                has_keys
+            }
+            Ok(None) => {
+                debug!(
+                    "Reward cycle #{} Signer #{}: No saved state, starting fresh",
+                    signer_config.reward_cycle, signer_config.signer_id
+                );
+                false
+            }
+            Err(e) => {
+                warn!(
+                    "Reward cycle #{} Signer #{}: Failed to load signer state: {:?}. \
+                     Starting with a fresh state machine (previous state may have been corrupted).",
+                    signer_config.reward_cycle, signer_config.signer_id, e
+                );
+                false
+            }
+        };
 
         Self {
             coordinator,
@@ -332,6 +351,7 @@ impl From<SignerConfig> for Signer {
             inference_task_sender: None,
             signer_endpoint: None,
             endpoint_broadcasted: false,
+            has_dkg_keys,
             signer_registry: crate::encryption::SignerRegistry::new(),
         }
     }
@@ -815,24 +835,60 @@ impl Signer {
         packets: &[Packet],
         current_reward_cycle: u64,
     ) {
-        let signer_outbound_messages = self
-            .state_machine
-            .process_inbound_messages(packets)
-            .unwrap_or_else(|e| {
-                error!("{self}: Failed to process inbound messages as a signer: {e:?}",);
+        // Wrap WSTS processing in catch_unwind to handle panics from the WSTS library
+        // (e.g., when sign_with_tweak tries to access DKG private keys that don't exist
+        // because the signer was restarted with a fresh state before DKG completed).
+        let signer_outbound_messages = match std::panic::catch_unwind(
+            std::panic::AssertUnwindSafe(|| {
+                self.state_machine.process_inbound_messages(packets)
+            }),
+        ) {
+            Ok(Ok(msgs)) => msgs,
+            Ok(Err(e)) => {
+                error!("{self}: Failed to process inbound messages as a signer: {e:?}");
                 vec![]
-            });
+            }
+            Err(panic_err) => {
+                let panic_msg = panic_err
+                    .downcast_ref::<String>()
+                    .map(|s| s.as_str())
+                    .or_else(|| panic_err.downcast_ref::<&str>().copied())
+                    .unwrap_or("unknown");
+                error!(
+                    "{self}: WSTS signer panicked while processing messages: {panic_msg}. \
+                     This likely indicates missing DKG key shares (signer restarted before \
+                     DKG completed). The signer will continue running and attempt to \
+                     complete DKG for the current reward cycle."
+                );
+                vec![]
+            }
+        };
 
         // Next process the message as the coordinator
         let (coordinator_outbound_messages, operation_results) = if self.reward_cycle
             != current_reward_cycle
         {
-            self.coordinator
-                .process_inbound_messages(packets)
-                .unwrap_or_else(|e| {
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.coordinator.process_inbound_messages(packets)
+            })) {
+                Ok(Ok(result)) => result,
+                Ok(Err(e)) => {
                     error!("{self}: Failed to process inbound messages as a coordinator: {e:?}");
                     (vec![], vec![])
-                })
+                }
+                Err(panic_err) => {
+                    let panic_msg = panic_err
+                        .downcast_ref::<String>()
+                        .map(|s| s.as_str())
+                        .or_else(|| panic_err.downcast_ref::<&str>().copied())
+                        .unwrap_or("unknown");
+                    error!(
+                        "{self}: WSTS coordinator panicked while processing messages: {panic_msg}. \
+                         The signer will continue running."
+                    );
+                    (vec![], vec![])
+                }
+            }
         } else {
             (vec![], vec![])
         };
@@ -1286,6 +1342,13 @@ impl Signer {
             match &mut packet.msg {
                 Message::SignatureShareRequest(request) => {
                     info!("{self}: Received SignatureShareRequest from miner");
+                    if !self.has_dkg_keys {
+                        warn!(
+                            "{self}: Rejecting SignatureShareRequest because DKG has not \
+                             completed for this cycle. The signer has no private key shares."
+                        );
+                        return None;
+                    }
                     if !self.validate_signature_share_request(request) {
                         warn!("{self}: SignatureShareRequest validation failed");
                         return None;
@@ -1358,6 +1421,7 @@ impl Signer {
 
     /// Process a dkg result by broadcasting a vote to the funai node
     fn process_dkg(&mut self, funai_client: &FunaiClient, dkg_public_key: &Point) {
+        self.has_dkg_keys = true;
         info!("{self}: DKG completed successfully, setting aggregate public key: {dkg_public_key}");
         let mut dkg_results_bytes = vec![];
         if let Err(e) = SignerMessage::serialize_dkg_result(

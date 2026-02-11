@@ -1831,17 +1831,38 @@ impl NakamotoChainState {
         match chainstate.get_aggregate_public_key_pox_4(sortdb, at_block_id, rc)? {
             Some(key) => Ok(key),
             None => {
-                // this can happen for a whole host of reasons
-                if warn_if_not_found {
-                    warn!(
-                        "Failed to get aggregate public key";
-                        "block_id" => %at_block_id,
-                        "reward_cycle" => rc,
-                    );
+                // FALLBACK: Walk backwards through previous cycles to find a valid aggregate key.
+                let mut fallback_key = None;
+                for delta in 1..=rc {
+                    let prev_rc = rc - delta;
+                    match chainstate.get_aggregate_public_key_pox_4(sortdb, at_block_id, prev_rc)? {
+                        Some(key) => {
+                            warn!(
+                                "Aggregate public key not found for cycle {rc}, \
+                                 using cycle {prev_rc} key as fallback \
+                                 (looked back {delta} cycle(s))"
+                            );
+                            fallback_key = Some(key);
+                            break;
+                        }
+                        None => continue,
+                    }
                 }
-                Err(ChainstateError::InvalidFunaiBlock(
-                    "Failed to get aggregate public key".into(),
-                ))
+                match fallback_key {
+                    Some(key) => Ok(key),
+                    None => {
+                        if warn_if_not_found {
+                            warn!(
+                                "Failed to get aggregate public key";
+                                "block_id" => %at_block_id,
+                                "reward_cycle" => rc,
+                            );
+                        }
+                        Err(ChainstateError::InvalidFunaiBlock(
+                            "Failed to get aggregate public key".into(),
+                        ))
+                    }
+                }
             }
         }
     }

@@ -61,6 +61,8 @@ pub struct SignCoordinator {
     reward_cycle: u64,
     message_slot_id: u32,
     slot_version: u32,
+    /// The actual aggregate public key used for signing (may differ from on-chain during recovery).
+    actual_aggregate_key: Point,
 }
 
 impl SignCoordinator {
@@ -113,13 +115,16 @@ impl SignCoordinator {
         };
 
         let mut coordinator: FireCoordinator<Aggregator> = FireCoordinator::new(coord_config);
-        let party_polynomials = get_signer_commitments(
+        let (party_polynomials, actual_aggregate_key) = get_signer_commitments(
             is_mainnet,
             reward_set_signers.as_slice(),
             funaidb_conn,
             reward_cycle,
             &aggregate_public_key,
         )?;
+
+        // Use the actual aggregate key from DKG results (may differ from on-chain during recovery).
+        let aggregate_public_key = actual_aggregate_key;
         
         let poly_vec: Vec<(u32, PolyCommitment)> = party_polynomials.into_iter().collect();
         if let Err(e) = coordinator
@@ -145,7 +150,13 @@ impl SignCoordinator {
             reward_cycle,
             message_slot_id,
             slot_version: initial_slot_version,
+            actual_aggregate_key: aggregate_public_key,
         })
+    }
+
+    /// Get the actual aggregate public key being used by this coordinator.
+    pub fn get_actual_aggregate_key(&self) -> &Point {
+        &self.actual_aggregate_key
     }
 
     fn get_sign_id(burn_block_height: u64, burnchain: &Burnchain) -> u64 {
@@ -503,60 +514,83 @@ impl NakamotoSigningParams {
     }
 }
 
+/// Returns (party_polynomials, actual_aggregate_key).
 fn get_signer_commitments(
     is_mainnet: bool,
     reward_set: &[NakamotoSignerEntry],
     funaidbs: &FunaiDBs,
     reward_cycle: u64,
     expected_aggregate_key: &Point,
-) -> Result<Vec<(u32, PolyCommitment)>, ChainstateError> {
+) -> Result<(Vec<(u32, PolyCommitment)>, Point), ChainstateError> {
     let commitment_contract =
         MessageSlotID::DkgResults.funai_db_contract(is_mainnet, reward_cycle);
     let signer_set_len = u32::try_from(reward_set.len())
         .map_err(|_| ChainstateError::InvalidFunaiBlock("Reward set length exceeds u32".into()))?;
-    for signer_id in 0..signer_set_len {
-        let Some(signer_data) = funaidbs.get_latest_chunk(&commitment_contract, signer_id)?
-        else {
-            warn!(
-                "Failed to fetch DKG result, will look for results from other signers.";
-                "signer_id" => signer_id
-            );
-            continue;
-        };
-        let Ok(SignerMessage::DkgResults {
-                   aggregate_key,
-                   party_polynomials,
-               }) = SignerMessage::consensus_deserialize(&mut signer_data.as_slice())
-        else {
-            warn!(
-                "Failed to parse DKG result, will look for results from other signers.";
-                "signer_id" => signer_id,
-            );
-            continue;
-        };
 
-        if &aggregate_key != expected_aggregate_key {
-            warn!(
-                "Aggregate key in DKG results does not match expected, will look for results from other signers.";
-                "expected" => %expected_aggregate_key,
-                "reported" => %aggregate_key,
-            );
-            continue;
+    // Pass 1: match expected key; Pass 2: accept any self-consistent DKG results
+    for pass in 0..2 {
+        for signer_id in 0..signer_set_len {
+            let Some(signer_data) = funaidbs.get_latest_chunk(&commitment_contract, signer_id)?
+            else {
+                if pass == 0 {
+                    warn!(
+                        "Failed to fetch DKG result, will look for results from other signers.";
+                        "signer_id" => signer_id
+                    );
+                }
+                continue;
+            };
+            let Ok(SignerMessage::DkgResults {
+                       aggregate_key,
+                       party_polynomials,
+                   }) = SignerMessage::consensus_deserialize(&mut signer_data.as_slice())
+            else {
+                if pass == 0 {
+                    warn!(
+                        "Failed to parse DKG result, will look for results from other signers.";
+                        "signer_id" => signer_id,
+                    );
+                }
+                continue;
+            };
+
+            let computed_key = party_polynomials
+                .iter()
+                .fold(Point::default(), |s, (_, comm)| s + comm.poly[0]);
+
+            if pass == 0 {
+                if &aggregate_key != expected_aggregate_key {
+                    warn!(
+                        "Aggregate key in DKG results does not match expected, will look for results from other signers.";
+                        "expected" => %expected_aggregate_key,
+                        "reported" => %aggregate_key,
+                    );
+                    continue;
+                }
+                if expected_aggregate_key != &computed_key {
+                    warn!(
+                        "Aggregate key computed from DKG results does not match expected, will look for results from other signers.";
+                        "expected" => %expected_aggregate_key,
+                        "computed" => %computed_key,
+                    );
+                    continue;
+                }
+                return Ok((party_polynomials, aggregate_key));
+            } else {
+                // Accept self-consistent DKG results even if key differs from on-chain.
+                if aggregate_key != computed_key {
+                    continue;
+                }
+                warn!(
+                    "Accepting signer DKG results with non-matching aggregate key (fallback recovery)";
+                    "expected_key" => %expected_aggregate_key,
+                    "actual_key" => %aggregate_key,
+                    "signer_id" => signer_id,
+                    "reward_cycle" => reward_cycle,
+                );
+                return Ok((party_polynomials, aggregate_key));
+            }
         }
-        let computed_key = party_polynomials
-            .iter()
-            .fold(Point::default(), |s, (_, comm)| s + comm.poly[0]);
-
-        if expected_aggregate_key != &computed_key {
-            warn!(
-                "Aggregate key computed from DKG results does not match expected, will look for results from other signers.";
-                "expected" => %expected_aggregate_key,
-                "computed" => %computed_key,
-            );
-            continue;
-        }
-
-        return Ok(party_polynomials);
     }
     error!(
         "No valid DKG results found for the active signing set, cannot coordinate a group signature";
