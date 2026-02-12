@@ -73,9 +73,11 @@ pub async fn infer(user_input: &str, context_messages: Option<Vec<ChatCompletion
         prompt: String,
     }
 
-    #[derive(Deserialize)]
+    #[derive(Deserialize, Serialize)]
     struct GenerateResponse {
         text: String,
+        #[serde(default)]
+        first_top_logprobs: Vec<String>,
     }
 
     let request_body = GenerateRequest {
@@ -112,7 +114,10 @@ pub async fn infer(user_input: &str, context_messages: Option<Vec<ChatCompletion
     }
 
     let payload: GenerateResponse = response.json().await?;
-    Ok(payload.text)
+    info!("infer response payload: text={}, first_top_logprobs={:?}", payload.text, payload.first_top_logprobs);
+    // Return full JSON (including first_top_logprobs) so the Signer can
+    // extract tokens for overlap verification when validating the block.
+    Ok(serde_json::to_string(&payload).unwrap_or(payload.text))
 }
 
 pub async fn infer_check(user_input: &str, output: &str, context_messages: Option<Vec<ChatCompletionMessage>>)  -> Result<i32, Box<dyn error::Error>> {

@@ -1020,6 +1020,62 @@ impl Signer {
             .collect()
     }
 
+    /// Try to decrypt an encrypted input by looking up the original encrypted data
+    /// from the inference tasks database and decrypting it with the signer's private key.
+    ///
+    /// The on-chain input for encrypted tasks is a hash placeholder like "enc:{hash16}".
+    /// The actual encrypted JSON (EncryptedData) is stored in the inference_tasks DB.
+    fn try_decrypt_input(&self, enc_placeholder: &str, txid: &str) -> Option<String> {
+        // Inference tasks DB is in the same directory as the signer DB
+        let inference_db_path = self.db_path.parent()?.join("inference_tasks.db");
+        if !inference_db_path.exists() {
+            warn!("Inference tasks DB not found at {:?}", inference_db_path);
+            return None;
+        }
+
+        let conn = match rusqlite::Connection::open_with_flags(
+            &inference_db_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        ) {
+            Ok(c) => c,
+            Err(e) => {
+                warn!("Failed to open inference tasks DB: {}", e);
+                return None;
+            }
+        };
+
+        // Look up the task whose user_input matches the enc: hash placeholder
+        let encrypted_json: Option<String> = conn
+            .query_row(
+                "SELECT encrypted_user_input FROM inference_tasks WHERE user_input = ?1 AND is_encrypted = 1 LIMIT 1",
+                rusqlite::params![enc_placeholder],
+                |row| row.get(0),
+            )
+            .ok()?;
+
+        let encrypted_json = encrypted_json?;
+
+        // Parse and decrypt
+        let encrypted_data = match crate::encryption::EncryptedData::from_json(&encrypted_json) {
+            Ok(d) => d,
+            Err(e) => {
+                warn!("Failed to parse encrypted data for tx {txid}: {e}");
+                return None;
+            }
+        };
+
+        match crate::encryption::InferenceEncryption::decrypt(&encrypted_data, &self.funai_private_key) {
+            Ok(plaintext) => {
+                info!("Decrypted input for tx {txid}: length={}", plaintext.len());
+                Some(plaintext)
+            }
+            Err(e) => {
+                warn!("Failed to decrypt input for tx {txid}: {e}");
+                None
+            }
+        }
+    }
+
     /// Try to extract an array of string tokens from a JSON value.
     /// Only supports object field "first_top_logprobs" (array of strings).
     fn extract_tokens_from_json(value: &serde_json::Value) -> Option<Vec<String>> {
@@ -1069,7 +1125,7 @@ impl Signer {
                                         continue;
                                     }
                                     let output = infer_res.output.clone();
-                                    let user_input = input.to_string();
+                                    let raw_input = input.to_string();
                                     let context_str = context.to_string();
                                     let chat_completion_message: Vec<serde_json::Value> = serde_json::from_str(context_str.as_str()).unwrap_or(vec![]);
                                     let _context_messages = if chat_completion_message.is_empty() {
@@ -1077,6 +1133,19 @@ impl Signer {
                                     } else {
                                         Some(chat_completion_message)
                                     };
+
+                                    // If the input is encrypted (starts with "enc:"), decrypt it
+                                    // by looking up the original encrypted data from the inference DB.
+                                    let user_input = if raw_input.starts_with("enc:") {
+                                        self.try_decrypt_input(&raw_input, &txid)
+                                            .unwrap_or_else(|| {
+                                                warn!("Could not decrypt input for tx {txid}, using raw input");
+                                                raw_input.clone()
+                                            })
+                                    } else {
+                                        raw_input.clone()
+                                    };
+
                                     // Call local verifier (port 8000) with signature
                                     let rt = Runtime::new().unwrap();
                                     let post_body = serde_json::json!({
@@ -1112,6 +1181,7 @@ impl Signer {
                                     });
                                     let ok = match local_resp {
                                         Ok(resp) => {
+                                            info!("Local verifier response for tx {txid}: {:?}", resp);
                                             if !resp.status().is_success() {
                                                 warn!("Local verifier returned non-200 for tx {txid}: {:?}", resp.status());
                                                 false
@@ -1123,6 +1193,7 @@ impl Signer {
                                                         let node_tokens = serde_json::from_str::<serde_json::Value>(&output)
                                                             .ok()
                                                             .and_then(|v| Self::extract_tokens_from_json(&v));
+                                                        info!("Extracted local tokens,node_tokens for tx {txid}: {:?} {:?}", local_tokens, node_tokens);
                                                         if let (Some(lt), Some(rtoks)) = (local_tokens, node_tokens) {
                                                             let len_l = lt.len();
                                                             let len_r = rtoks.len();

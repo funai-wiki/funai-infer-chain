@@ -378,7 +378,9 @@ async fn submit_tx_to_miner(client: &reqwest::Client, config: &Config, task: &Ta
             let txid = resp.text().await?;
             info!("Successfully submitted transaction and result, TXID: {}", txid);
         } else {
-            error!("Failed to submit transaction to Miner: {:?}", resp.status());
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_else(|e| format!("(failed to read body: {})", e));
+            error!("Failed to submit transaction to Miner: status={}, body={}", status, body);
         }
     } else {
         warn!("No signed transaction provided for task {}", task.task_id);
