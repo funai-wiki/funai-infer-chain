@@ -28,7 +28,7 @@ use clarity::vm::clarity::TransactionConnection;
 use clarity::vm::costs::ExecutionCost;
 use clarity::vm::database::BurnStateDB;
 use clarity::vm::errors::Error as InterpreterError;
-use clarity::vm::types::{QualifiedContractIdentifier, TypeSignature, FunaiAddressExtensions as ClarityFunaiAddressExtensions};
+use clarity::vm::types::{PrincipalData, QualifiedContractIdentifier, TypeSignature, FunaiAddressExtensions as ClarityFunaiAddressExtensions};
 use libfunaidb::FunaiDBChunkData;
 use serde::Deserialize;
 use funai_common::codec::{read_next, write_next, Error as CodecError, FunaiMessageCodec};
@@ -120,6 +120,10 @@ pub struct NakamotoBlockBuilder {
     txs: Vec<FunaiTransaction>,
     /// header we're filling in
     header: NakamotoBlockHeader,
+    /// Cached miner address for Infer tx processing.
+    /// For tenure-start blocks, derived from the coinbase tx.
+    /// For non-tenure-start blocks, looked up from the tenure-start block.
+    miner_address: Option<PrincipalData>,
 }
 
 pub struct MinerTenureInfo<'a> {
@@ -144,6 +148,9 @@ impl NakamotoBlockBuilder {
         tenure_change: &FunaiTransaction,
         coinbase: &FunaiTransaction,
     ) -> NakamotoBlockBuilder {
+        let miner_address = Some(
+            coinbase.get_origin().get_address(false).to_account_principal()
+        );
         NakamotoBlockBuilder {
             parent_header: None,
             total_burn: 0,
@@ -153,6 +160,7 @@ impl NakamotoBlockBuilder {
             bytes_so_far: 0,
             txs: vec![],
             header: NakamotoBlockHeader::genesis(),
+            miner_address,
         }
     }
 
@@ -195,6 +203,13 @@ impl NakamotoBlockBuilder {
             }
         }
 
+        // Derive miner address from coinbase tx if present (tenure-start blocks).
+        // For non-tenure-start blocks, this will be None and must be set later
+        // via set_miner_address() before mining transactions.
+        let miner_address = coinbase.map(|cb| {
+            cb.get_origin().get_address(cb.is_mainnet()).to_account_principal()
+        });
+
         Ok(NakamotoBlockBuilder {
             parent_header: Some(parent_funai_header.clone()),
             total_burn,
@@ -209,7 +224,19 @@ impl NakamotoBlockBuilder {
                 tenure_id_consensus_hash.clone(),
                 parent_funai_header.index_block_hash(),
             ),
+            miner_address,
         })
+    }
+
+    /// Set the miner address for Infer tx processing.
+    /// This is used for non-tenure-start blocks where the coinbase tx is not present.
+    pub fn set_miner_address(&mut self, address: Option<PrincipalData>) {
+        self.miner_address = address;
+    }
+
+    /// Check if the miner address has been set.
+    pub fn has_miner_address(&self) -> bool {
+        self.miner_address.is_some()
     }
 
     /// This function should be called before `tenure_begin`.
@@ -428,6 +455,34 @@ impl NakamotoBlockBuilder {
             tenure_info.coinbase_tx(),
         )?;
 
+        // For non-tenure-start blocks (no coinbase), look up the miner address
+        // from the tenure-start block in the staging DB so Infer txs can correctly
+        // transfer the 10% miner share.
+        if !builder.has_miner_address() {
+            let mainnet = chainstate_handle.config().mainnet;
+            let staging_db = chainstate_handle.nakamoto_blocks_db();
+            match staging_db.get_nakamoto_tenure_start_block(tenure_id_consensus_hash) {
+                Ok(Some(tenure_start_block)) => {
+                    let addr = tenure_start_block.get_coinbase_tx().map(|coinbase_tx| {
+                        coinbase_tx
+                            .get_origin()
+                            .get_address(mainnet)
+                            .to_account_principal()
+                    });
+                    builder.set_miner_address(addr);
+                }
+                Ok(None) => {
+                    warn!(
+                        "Miner: could not find tenure-start block for consensus hash {}",
+                        tenure_id_consensus_hash
+                    );
+                }
+                Err(e) => {
+                    warn!("Miner: failed to look up tenure-start block: {:?}", e);
+                }
+            }
+        }
+
         let ts_start = get_epoch_time_ms();
 
         let mut miner_tenure_info =
@@ -594,11 +649,11 @@ impl BlockBuilder for NakamotoBlockBuilder {
 
         let quiet = !cfg!(test);
         
-        // Extract miner address from coinbase transaction for Infer tx processing
-        // This must match the follower's behavior in append_block to ensure deterministic state roots
-        let miner_address = self.coinbase_tx.as_ref().map(|coinbase_tx| {
-            coinbase_tx.get_origin().get_address(clarity_tx.config.mainnet).to_account_principal()
-        });
+        // Use cached miner address for Infer tx processing.
+        // For tenure-start blocks, this is derived from the coinbase tx.
+        // For non-tenure-start blocks, this is looked up from the tenure-start block.
+        // This must match the follower's behavior in append_block to ensure deterministic state roots.
+        let miner_address = self.miner_address.clone();
         
         let result = {
             // preemptively skip problematic transactions

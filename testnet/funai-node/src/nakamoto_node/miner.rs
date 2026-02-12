@@ -384,6 +384,9 @@ impl BlockMinerThread {
             ))
         })?;
 
+        // Use the actual aggregate key from DKG results (may differ from on-chain during recovery).
+        let actual_aggregate_key = coordinator.get_actual_aggregate_key().clone();
+
         *attempts += 1;
         let signature = coordinator.begin_sign(
             new_block,
@@ -394,7 +397,7 @@ impl BlockMinerThread {
             &funaidbs,
         )?;
 
-        Ok((aggregate_public_key, signature))
+        Ok((actual_aggregate_key, signature))
     }
 
     fn propose_block(

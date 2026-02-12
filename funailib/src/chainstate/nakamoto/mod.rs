@@ -3000,6 +3000,11 @@ impl NakamotoChainState {
             }
         }
 
+        // Capture root_path before setup_block borrows chainstate_tx,
+        // needed for looking up the miner address from the staging DB for non-tenure-start blocks.
+        let chainstate_root_path = chainstate_tx.root_path.clone();
+        let chainstate_mainnet = chainstate_tx.config.mainnet;
+
         // begin processing this block
         let SetupBlockResult {
             mut clarity_tx,
@@ -3044,10 +3049,58 @@ impl NakamotoChainState {
         );
 
         // process anchored block
+        // Determine the miner address from the coinbase transaction.
+        // For tenure-start blocks, get it directly from the block's coinbase tx.
+        // For non-tenure-start blocks, look up the tenure-start block from the staging DB.
         let miner_address = if let Some(coinbase_tx) = block.get_coinbase_tx() {
-            Some(coinbase_tx.get_origin().get_address(clarity_tx.config.mainnet).to_account_principal())
+            Some(coinbase_tx.get_origin().get_address(chainstate_mainnet).to_account_principal())
         } else {
-            None
+            // Non-tenure-start block: look up the tenure-start block's coinbase
+            // to determine the miner address for Infer tx processing
+            match FunaiChainState::static_get_nakamoto_staging_blocks_path(
+                PathBuf::from(chainstate_root_path.as_str()),
+            ) {
+                Ok(staging_path) => {
+                    match FunaiChainState::open_nakamoto_staging_blocks(&staging_path, false) {
+                        Ok(staging_conn) => {
+                            match staging_conn.conn().get_nakamoto_tenure_start_block(
+                                &block.header.consensus_hash,
+                            ) {
+                                Ok(Some(tenure_start_block)) => {
+                                    tenure_start_block.get_coinbase_tx().map(|coinbase_tx| {
+                                        coinbase_tx
+                                            .get_origin()
+                                            .get_address(chainstate_mainnet)
+                                            .to_account_principal()
+                                    })
+                                }
+                                Ok(None) => {
+                                    warn!(
+                                        "Could not find tenure-start block for consensus hash {}",
+                                        &block.header.consensus_hash
+                                    );
+                                    None
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        "Failed to look up tenure-start block: {:?}",
+                                        e
+                                    );
+                                    None
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Failed to open staging blocks DB for miner address lookup: {:?}", e);
+                            None
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to get staging blocks path: {:?}", e);
+                    None
+                }
+            }
         };
 
         let (block_fees, txs_receipts) = match FunaiChainState::process_block_transactions(
@@ -3141,8 +3194,8 @@ impl NakamotoChainState {
             clarity_tx.precommit_to_block(&block.header.consensus_hash, &block_hash);
 
         // calculate the reward for this tenure
-        let scheduled_miner_reward = if new_tenure {
-            Some(Self::calculate_scheduled_tenure_reward(
+        let (scheduled_miner_reward, inference_node_rewards) = if new_tenure {
+            let (reward, node_rewards) = Self::calculate_scheduled_tenure_reward(
                 chainstate_tx,
                 burn_dbconn,
                 block,
@@ -3151,9 +3204,10 @@ impl NakamotoChainState {
                 chain_tip_burn_header_height.into(),
                 burnchain_commit_burn,
                 burnchain_sortition_burn,
-            )?)
+            )?;
+            (Some(reward), node_rewards)
         } else {
-            None
+            (None, vec![])
         };
 
         // extract matured rewards info -- we'll need it for the receipt
@@ -3187,6 +3241,31 @@ impl NakamotoChainState {
 
         let new_block_id = new_tip.index_block_hash();
         chainstate_tx.log_transactions_processed(&new_block_id, &tx_receipts);
+
+        // Record inference node rewards in the payment schedule so they mature later
+        // (ported from Epoch 2 path in blocks.rs)
+        if !inference_node_rewards.is_empty() {
+            if let Some(ref miner_reward) = scheduled_miner_reward {
+                for (i, (node_principal, node_reward)) in inference_node_rewards.into_iter().enumerate() {
+                    let mut node_schedule = miner_reward.clone();
+                    node_schedule.recipient = node_principal;
+                    node_schedule.coinbase = node_reward;
+                    // Fee is already handled by the miner reward, so we set fees to 0 for nodes
+                    node_schedule.tx_fees = MinerPaymentTxFees::Epoch2 { anchored: 0, streamed: 0 };
+                    // Set burn to 0 for inference nodes so they don't scale the miner's reward
+                    node_schedule.burnchain_commit_burn = 0;
+                    node_schedule.burnchain_sortition_burn = 0;
+
+                    if let Err(e) = FunaiChainState::insert_inference_payment_schedule(
+                        &mut chainstate_tx.tx,
+                        &node_schedule,
+                        (i + 1) as u32, // vtxindex 0 is for miner, 1+ for nodes
+                    ) {
+                        error!("Failed to insert Nakamoto inference payment schedule: {:?}", e);
+                    }
+                }
+            }
+        }
 
         // store the reward set calculated during this block if it happened
         // NOTE: miner and proposal evaluation should not invoke this because

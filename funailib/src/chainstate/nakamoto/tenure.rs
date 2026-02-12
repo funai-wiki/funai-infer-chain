@@ -60,12 +60,13 @@
 //!
 use std::collections::HashSet;
 use std::ops::DerefMut;
+use std::path::PathBuf;
 
 use clarity::vm::ast::ASTRules;
 use clarity::vm::costs::ExecutionCost;
 use clarity::vm::database::BurnStateDB;
 use clarity::vm::events::FunaiTransactionEvent;
-use clarity::vm::types::FunaiAddressExtensions;
+use clarity::vm::types::{FunaiAddressExtensions, PrincipalData};
 use lazy_static::{__Deref, lazy_static};
 use rusqlite::types::{FromSql, FromSqlError};
 use rusqlite::{params, Connection, OptionalExtension, ToSql, NO_PARAMS};
@@ -941,6 +942,10 @@ impl NakamotoChainState {
     /// - the parent tenure's total fees
     ///
     /// TODO: unit test
+    /// Returns (miner_reward_schedule, inference_node_rewards).
+    /// If the block contains Infer transactions with non-empty output_hash,
+    /// 10% of coinbase goes to the miner and 90% is distributed to inference nodes
+    /// proportionally by their infer amounts.
     pub(crate) fn calculate_scheduled_tenure_reward(
         chainstate_tx: &mut ChainstateTx,
         burn_dbconn: &mut SortitionHandleTx,
@@ -950,7 +955,7 @@ impl NakamotoChainState {
         chain_tip_burn_header_height: u64,
         burnchain_commit_burn: u64,
         burnchain_sortition_burn: u64,
-    ) -> Result<MinerPaymentSchedule, ChainstateError> {
+    ) -> Result<(MinerPaymentSchedule, Vec<(PrincipalData, u128)>), ChainstateError> {
         let mainnet = chainstate_tx.get_config().mainnet;
 
         // figure out if there any accumulated rewards by
@@ -968,6 +973,40 @@ impl NakamotoChainState {
         );
 
         let total_coinbase = coinbase_at_block.saturating_add(accumulated_rewards);
+
+        // ── Inference reward split (ported from Epoch 2 path) ──
+        // In Nakamoto, a tenure spans multiple blocks and only the tenure-start block
+        // has a coinbase. Infer transactions can appear in ANY block of a tenure.
+        // Therefore, we scan both:
+        //   (1) the current tenure-start block's own transactions
+        //   (2) all blocks from the PREVIOUS tenure (which is fully complete by now)
+        // to determine the coinbase split for inference nodes.
+        let mut infer_txs_fees: Vec<(u64, PrincipalData)> = vec![];
+        let mut total_infer_fee = 0u64;
+
+        // Helper closure to scan transactions for Infer txs
+        let scan_block_for_infer = |txs: &[FunaiTransaction],
+                                     infer_fees: &mut Vec<(u64, PrincipalData)>,
+                                     total_fee: &mut u64| {
+            for tx in txs.iter() {
+                if let TransactionPayload::Infer(
+                    _from, amount, _user_input, _context,
+                    ref node_principal, _model_name, ref output_hash,
+                ) = &tx.payload
+                {
+                    if !output_hash.to_string().is_empty() {
+                        infer_fees.push((*amount, node_principal.clone()));
+                        *total_fee += *amount;
+                    }
+                }
+            }
+        };
+
+        // (1) Scan current tenure-start block's transactions
+        scan_block_for_infer(&block.txs, &mut infer_txs_fees, &mut total_infer_fee);
+
+        // (2) Scan all blocks from the previous tenure for Infer txs.
+        // The previous tenure is fully processed by now, so we can scan all its blocks.
         let parent_tenure_start_header: FunaiHeaderInfo = Self::get_header_by_coinbase_height(
             chainstate_tx,
             &block.header.parent_block_id,
@@ -981,6 +1020,76 @@ impl NakamotoChainState {
                   "block_consensus_hash" => %block.header.consensus_hash);
             ChainstateError::NoSuchBlockError
         })?;
+
+        if parent_tenure_start_header.is_nakamoto_block() {
+            let parent_tenure_ch = parent_tenure_start_header.consensus_hash.clone();
+            let staging_path_result = FunaiChainState::static_get_nakamoto_staging_blocks_path(
+                PathBuf::from(chainstate_tx.root_path.as_str()),
+            );
+            if let Ok(staging_path) = staging_path_result {
+                if let Ok(staging_conn) =
+                    FunaiChainState::open_nakamoto_staging_blocks(&staging_path, false)
+                {
+                    match staging_conn.conn().get_all_blocks_in_tenure(&parent_tenure_ch) {
+                        Ok(prev_tenure_blocks) => {
+                            info!(
+                                "Scanning {} blocks from previous tenure {} for Infer txs",
+                                prev_tenure_blocks.len(),
+                                &parent_tenure_ch
+                            );
+                            for prev_block in prev_tenure_blocks.iter() {
+                                scan_block_for_infer(
+                                    &prev_block.txs,
+                                    &mut infer_txs_fees,
+                                    &mut total_infer_fee,
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Failed to load previous tenure blocks for inference reward scan: {:?}",
+                                e
+                            );
+                        }
+                    }
+                } else {
+                    warn!("Failed to open staging blocks DB for inference reward scan");
+                }
+            } else {
+                warn!("Failed to get staging blocks path for inference reward scan");
+            }
+        }
+
+        let has_infer_txs = !infer_txs_fees.is_empty();
+        let mut node_rewards: Vec<(PrincipalData, u128)> = vec![];
+
+        let miner_coinbase: u128 = if has_infer_txs {
+            // 10% of total_coinbase to miner
+            let miner_share = total_coinbase.saturating_mul(10).saturating_div(100);
+            // 90% distributed to inference nodes proportionally
+            let nodes_share = total_coinbase.saturating_sub(miner_share);
+
+            if total_infer_fee > 0 {
+                for (amount, node_principal) in infer_txs_fees {
+                    let node_reward = nodes_share
+                        .saturating_mul(amount as u128)
+                        .saturating_div(total_infer_fee as u128);
+                    if node_reward > 0 {
+                        node_rewards.push((node_principal, node_reward));
+                    }
+                }
+            }
+
+            info!(
+                "Nakamoto tenure reward: {} infer txs (prev+current tenure), miner gets {}, inference nodes share {}",
+                node_rewards.len(), miner_share, nodes_share
+            );
+            miner_share
+        } else {
+            total_coinbase
+        };
+        // ── End inference reward split ──
+
         // fetch the parent tenure fees by reading the total tx fees from this block's
         // *parent* (not parent_tenure_start_header), because `parent_block_id` is the last
         // block of that tenure, so contains a total fee accumulation for the whole tenure
@@ -1004,7 +1113,7 @@ impl NakamotoChainState {
             0
         };
 
-        Ok(Self::make_scheduled_miner_reward(
+        let scheduled_miner_reward = Self::make_scheduled_miner_reward(
             mainnet,
             evaluated_epoch,
             &parent_tenure_start_header.anchored_header.block_hash(),
@@ -1020,8 +1129,10 @@ impl NakamotoChainState {
             parent_tenure_fees,
             burnchain_commit_burn,
             burnchain_sortition_burn,
-            total_coinbase,
-        ))
+            miner_coinbase,
+        );
+
+        Ok((scheduled_miner_reward, node_rewards))
     }
 
     /// Check that a given Nakamoto block's tenure's sortition exists and was processed on this

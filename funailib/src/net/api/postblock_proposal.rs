@@ -19,6 +19,7 @@ use std::thread::{self, JoinHandle, Thread};
 
 use clarity::vm::ast::ASTRules;
 use clarity::vm::costs::ExecutionCost;
+use clarity::vm::types::FunaiAddressExtensions as ClarityFunaiAddressExtensions;
 use regex::{Captures, Regex};
 use serde::Deserialize;
 use funai_common::codec::{
@@ -291,6 +292,32 @@ impl NakamotoBlockProposal {
             tenure_change,
             coinbase,
         )?;
+
+        // For non-tenure-start blocks (no coinbase), look up the miner address
+        // from the tenure-start block so Infer txs can correctly transfer the 10% miner share.
+        if !builder.has_miner_address() {
+            let staging_db = chainstate.nakamoto_blocks_db();
+            match staging_db.get_nakamoto_tenure_start_block(&self.block.header.consensus_hash) {
+                Ok(Some(tenure_start_block)) => {
+                    let addr = tenure_start_block.get_coinbase_tx().map(|coinbase_tx| {
+                        coinbase_tx
+                            .get_origin()
+                            .get_address(mainnet)
+                            .to_account_principal()
+                    });
+                    builder.set_miner_address(addr);
+                }
+                Ok(None) => {
+                    warn!(
+                        "Block proposal: could not find tenure-start block for consensus hash {}",
+                        &self.block.header.consensus_hash
+                    );
+                }
+                Err(e) => {
+                    warn!("Block proposal: failed to look up tenure-start block: {:?}", e);
+                }
+            }
+        }
 
         let mut miner_tenure_info =
             builder.load_tenure_info(chainstate, &burn_dbconn, tenure_cause)?;
