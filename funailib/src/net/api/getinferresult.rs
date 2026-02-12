@@ -27,6 +27,8 @@ pub struct RPCInferResultData {
     pub input: String,
     pub output: String,
     pub output_hash: String,
+    pub inference_node_id: String,
+    pub create_time: String,
 }
 
 impl RPCInferResultData {
@@ -41,6 +43,8 @@ impl RPCInferResultData {
             input: result.input,
             output: result.output,
             output_hash: result.output_hash,
+            inference_node_id: result.inference_node_id,
+            create_time: result.create_time,
         })
     }
 }
