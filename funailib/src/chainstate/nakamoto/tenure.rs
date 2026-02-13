@@ -332,8 +332,9 @@ impl NakamotoChainState {
             matured_miner_schedule.latest_miners,
             matured_miner_schedule.parent_miner,
         ) {
-            Ok(Some((recipient, _user_burns, parent, reward_info))) => Some(MaturedMinerRewards {
+            Ok(Some((recipient, user_burns, parent, reward_info))) => Some(MaturedMinerRewards {
                 recipient,
+                user_rewards: user_burns,
                 parent_reward: parent,
                 reward_info,
             }),

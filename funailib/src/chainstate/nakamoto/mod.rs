@@ -243,6 +243,8 @@ pub struct MaturedMinerRewards {
     /// NOTE: in epoch2, if a PoisonMicroblock report was successful, then the recipient is the
     /// reporter, not the miner.
     pub recipient: MinerReward,
+    /// Inference-node (user-support) rewards that matured alongside the miner reward.
+    pub user_rewards: Vec<MinerReward>,
     /// the parent block's reward.
     /// this is all of the fees they accumulated during their tenure.
     pub parent_reward: MinerReward,
@@ -253,7 +255,10 @@ pub struct MaturedMinerRewards {
 impl MaturedMinerRewards {
     /// Get the list of miner rewards this struct represents
     pub fn consolidate(&self) -> Vec<MinerReward> {
-        vec![self.recipient.clone(), self.parent_reward.clone()]
+        let mut rewards = vec![self.recipient.clone()];
+        rewards.extend(self.user_rewards.iter().cloned());
+        rewards.push(self.parent_reward.clone());
+        rewards
     }
 }
 
@@ -2746,11 +2751,11 @@ impl NakamotoChainState {
     ) -> Result<Vec<FunaiTransactionEvent>, ChainstateError> {
         // add miner payments
         if let Some(ref rewards) = miner_payouts {
-            // grant in order by miner, then users
+            // grant in order by miner, then inference-node users, then parent
             let matured_ustx = FunaiChainState::process_matured_miner_rewards(
                 clarity_tx,
                 &rewards.recipient,
-                &[],
+                &rewards.user_rewards,
                 &rewards.parent_reward,
             )?;
 
