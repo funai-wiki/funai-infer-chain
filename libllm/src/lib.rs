@@ -87,7 +87,7 @@ pub async fn infer(user_input: &str, context_messages: Option<Vec<ChatCompletion
 
     // Generate signature headers if private key is available
     let mut request = reqwest::Client::new()
-        .post("http://34.143.166.224:8000/generate");
+        .post("http://127.0.0.1:8000/generate");
 
     if let Some((pubkey_hex, sig_der_hex, timestamp)) = generate_signature_headers("/generate", &body_json) {
         request = request
@@ -152,7 +152,7 @@ pub async fn infer_check(user_input: &str, output: &str, context_messages: Optio
 
     // Generate signature headers if private key is available
     let mut request = reqwest::Client::new()
-        .post("http://34.143.166.224:8000/generate");
+        .post("http://127.0.0.1:8000/generate");
 
     if let Some((pubkey_hex, sig_der_hex, timestamp)) = generate_signature_headers("/generate", &body_json) {
         request = request
@@ -195,7 +195,7 @@ pub async fn random_question() -> Result<String, Box<dyn error::Error>> {
 
     // Generate signature headers if private key is available
     let mut request = reqwest::Client::new()
-        .post("http://34.143.166.224:8000/generate");
+        .post("http://127.0.0.1:8000/generate");
 
     if let Some((pubkey_hex, sig_der_hex, timestamp)) = generate_signature_headers("/generate", &body_json) {
         request = request
