@@ -222,10 +222,72 @@ impl RunLoop {
         })
     }
 
-    /// Refresh signer configuration for a specific reward cycle
+    /// Refresh signer configuration for a specific reward cycle.
+    /// If the reward set is not available for the requested cycle (e.g. the
+    /// chain is stuck and no blocks were mined during the prepare phase),
+    /// fall back to the most recent cycle that has a valid reward set.
     fn refresh_signer_config(&mut self, reward_cycle: u64) {
         let reward_index = reward_cycle % 2;
-        if let Some(new_signer_config) = self.get_signer_config(reward_cycle) {
+
+        let resolved_config = self.get_signer_config(reward_cycle).or_else(|| {
+            for delta in 1..=reward_cycle {
+                let prev_cycle = reward_cycle - delta;
+                if let Some(mut cfg) = self.get_signer_config(prev_cycle) {
+                    warn!(
+                        "Reward set not found for cycle {reward_cycle}; \
+                         using cycle {prev_cycle} as fallback (looked back {delta} cycle(s))"
+                    );
+                    cfg.reward_cycle = reward_cycle;
+                    return Some(cfg);
+                }
+            }
+            // get_signer_config failed for all cycles (funaidb slots don't
+            // contain this signer). Build a config from the reward set alone,
+            // using signer_id as the slot_id.
+            let current_addr = self.funai_client.get_signer_address();
+            for delta in 0..=reward_cycle {
+                let try_cycle = reward_cycle - delta;
+                if let Ok(Some(signer_entries)) = self.get_parsed_reward_set(try_cycle) {
+                    if let Some(&signer_id) = signer_entries.signer_ids.get(current_addr) {
+                        warn!(
+                            "Building fallback config from reward set of cycle {try_cycle} \
+                             (signer #{signer_id}); funaidb slots unavailable for all cycles"
+                        );
+                        let key_ids = signer_entries
+                            .signer_key_ids
+                            .get(&signer_id)
+                            .cloned()
+                            .unwrap_or_default();
+                        let num_signers = signer_entries.signer_ids.len();
+                        let signer_slot_ids: Vec<SignerSlotID> =
+                            (0..num_signers as u32).map(SignerSlotID).collect();
+                        return Some(SignerConfig {
+                            reward_cycle,
+                            signer_id,
+                            signer_slot_id: SignerSlotID(signer_id),
+                            key_ids,
+                            signer_entries,
+                            signer_slot_ids,
+                            ecdsa_private_key: self.config.ecdsa_private_key,
+                            funai_private_key: self.config.funai_private_key,
+                            node_host: self.config.node_host.to_string(),
+                            mainnet: self.config.network.is_mainnet(),
+                            dkg_end_timeout: self.config.dkg_end_timeout,
+                            dkg_private_timeout: self.config.dkg_private_timeout,
+                            dkg_public_timeout: self.config.dkg_public_timeout,
+                            nonce_timeout: self.config.nonce_timeout,
+                            sign_timeout: self.config.sign_timeout,
+                            tx_fee_ustx: self.config.tx_fee_ustx,
+                            db_path: self.config.db_path.clone(),
+                            support_models: self.config.support_models.clone(),
+                        });
+                    }
+                }
+            }
+            None
+        });
+
+        if let Some(new_signer_config) = resolved_config {
             let signer_id = new_signer_config.signer_id;
             debug!("Signer is registered for reward cycle {reward_cycle} as signer #{signer_id}. Initializing signer state.");
             if reward_cycle != 0 {
@@ -233,7 +295,6 @@ impl RunLoop {
                 let prior_reward_set = prior_reward_cycle % 2;
                 if let Some(signer) = self.funai_signers.get_mut(&prior_reward_set) {
                     if signer.reward_cycle == prior_reward_cycle {
-                        // The signers have been calculated for the next reward cycle. Update the current one
                         debug!("{signer}: Next reward cycle ({reward_cycle}) signer set calculated. Reconfiguring current reward cycle signer.");
                         signer.next_signer_addresses = new_signer_config
                             .signer_entries

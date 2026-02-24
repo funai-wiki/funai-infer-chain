@@ -301,17 +301,44 @@ impl From<SignerConfig> for Signer {
                     "Reward cycle #{} Signer #{}: Loading signer",
                     signer_config.reward_cycle, signer_config.signer_id
                 );
-                // Check if the saved state has DKG private keys
                 let has_keys = state.parties.iter().any(|(_, ps)| !ps.private_keys.is_empty());
                 state_machine.signer = v2::Signer::load(&state);
                 has_keys
             }
             Ok(None) => {
                 debug!(
-                    "Reward cycle #{} Signer #{}: No saved state, starting fresh",
+                    "Reward cycle #{} Signer #{}: No saved state for current cycle, \
+                     searching previous cycles for DKG keys...",
                     signer_config.reward_cycle, signer_config.signer_id
                 );
-                false
+                let mut found = false;
+                for delta in 1..=signer_config.reward_cycle {
+                    let prev_cycle = signer_config.reward_cycle - delta;
+                    if let Ok(Some(state)) = signer_db.get_signer_state(prev_cycle) {
+                        let has_keys =
+                            state.parties.iter().any(|(_, ps)| !ps.private_keys.is_empty());
+                        if has_keys {
+                            warn!(
+                                "Reward cycle #{} Signer #{}: Loading DKG keys from \
+                                 cycle {} (looked back {} cycle(s))",
+                                signer_config.reward_cycle,
+                                signer_config.signer_id,
+                                prev_cycle,
+                                delta
+                            );
+                            state_machine.signer = v2::Signer::load(&state);
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+                if !found {
+                    debug!(
+                        "Reward cycle #{} Signer #{}: No DKG keys found in any previous cycle",
+                        signer_config.reward_cycle, signer_config.signer_id
+                    );
+                }
+                found
             }
             Err(e) => {
                 warn!(
