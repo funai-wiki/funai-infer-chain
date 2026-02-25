@@ -38,9 +38,10 @@ pub static DIFFCHANGE_INTERVAL: u32 = 2016;
 /// How much time on average should occur between diffchanges
 pub static DIFFCHANGE_TIMESPAN: u32 = 14 * 24 * 3600;
 
-/// In Bitcoind this is insanely described as ~((u256)0 >> 32)
-pub fn max_target(_: Network) -> Uint256 {
-    Uint256::from_u64(0xFFFF) << 208
+/// Return the maximum target (minimum difficulty) for the given network,
+/// derived from the genesis block's bits field.
+pub fn max_target(network: Network) -> Uint256 {
+    genesis_block(network).header.target()
 }
 
 /// The maximum value allowed in an output (useful for sanity checking,

@@ -1062,17 +1062,22 @@ impl SpvClient {
     }
 
     /// Determine the (bits, target) between two headers
+    /// Return the max target (minimum difficulty) for the given network,
+    /// derived from the genesis block's bits field.
+    fn network_max_target(network_id: BitcoinNetworkType) -> Uint256 {
+        let network = match network_id {
+            BitcoinNetworkType::Mainnet => Network::Bitcoin,
+            BitcoinNetworkType::Testnet => Network::Testnet,
+            BitcoinNetworkType::Regtest => Network::Regtest,
+        };
+        genesis_block(network).header.target()
+    }
+
     pub fn get_target_between_headers(
         first_header: &LoneBlockHeader,
         last_header: &LoneBlockHeader,
+        max_target: &Uint256,
     ) -> (u32, Uint256) {
-        let max_target = Uint256([
-            0x0000000000000000,
-            0x0000000000000000,
-            0x0000000000000000,
-            0x00000000ffff0000,
-        ]);
-
         // find actual timespan as being clamped between +/- 4x of the target timespan
         let mut actual_timespan = (last_header.header.time - first_header.header.time) as u64;
         let target_timespan = BLOCK_DIFFICULTY_INTERVAL as u64;
@@ -1086,7 +1091,7 @@ impl SpvClient {
         let last_target = last_header.header.target();
         let new_target =
             (last_target * Uint256::from_u64(actual_timespan)) / Uint256::from_u64(target_timespan);
-        let target = cmp::min(new_target, max_target);
+        let target = cmp::min(new_target, *max_target);
 
         let bits = BlockHeader::compact_target_from_u256(&target);
         let target = BlockHeader::compact_target_to_u256(bits);
@@ -1115,25 +1120,15 @@ impl SpvClient {
         }
 
         // In Regtest mode there's no difficulty adjustment active.
-        // it uses the highest possible difficulty -- represents nBits = 0x207fffff
         if self.network_id == BitcoinNetworkType::Regtest {
-            return Ok(Some((
-                0x207fffff,
-                Uint256([
-                    0x0000000000000000,
-                    0x0000000000000000,
-                    0x0000000000000000,
-                    0x7fffffff00000000,
-                ]),
-            )));
+            let max_target = Self::network_max_target(self.network_id);
+            let max_target_bits = BlockHeader::compact_target_from_u256(&max_target);
+            return Ok(Some((max_target_bits, max_target)));
         }
 
-        let max_target = Uint256([
-            0x0000000000000000,
-            0x0000000000000000,
-            0x0000000000000000,
-            0x00000000ffff0000,
-        ]);
+        // Derive max_target from the genesis block so it matches the
+        // private chain's actual difficulty ceiling.
+        let max_target = Self::network_max_target(self.network_id);
         let max_target_bits = BlockHeader::compact_target_from_u256(&max_target);
 
         let parent_header = if headers_in_range.len() > 0 {
@@ -1178,6 +1173,7 @@ impl SpvClient {
         Ok(Some(SpvClient::get_target_between_headers(
             &first_header,
             &last_header,
+            &max_target,
         )))
     }
 
