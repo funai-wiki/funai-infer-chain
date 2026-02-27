@@ -230,7 +230,9 @@ impl RunLoop {
         let reward_index = reward_cycle % 2;
 
         let resolved_config = self.get_signer_config(reward_cycle).or_else(|| {
-            for delta in 1..=reward_cycle {
+            // Quick check: try a few recent cycles with full funaidb validation.
+            let max_funaidb_lookback = reward_cycle.min(3);
+            for delta in 1..=max_funaidb_lookback {
                 let prev_cycle = reward_cycle - delta;
                 if let Some(mut cfg) = self.get_signer_config(prev_cycle) {
                     warn!(
@@ -241,9 +243,9 @@ impl RunLoop {
                     return Some(cfg);
                 }
             }
-            // get_signer_config failed for all cycles (funaidb slots don't
-            // contain this signer). Build a config from the reward set alone,
-            // using signer_id as the slot_id.
+            // funaidb slots don't contain this signer for recent cycles.
+            // Build a config from the reward set alone, using signer_id
+            // as the slot_id.
             let current_addr = self.funai_client.get_signer_address();
             for delta in 0..=reward_cycle {
                 let try_cycle = reward_cycle - delta;

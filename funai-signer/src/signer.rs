@@ -312,7 +312,8 @@ impl From<SignerConfig> for Signer {
                     signer_config.reward_cycle, signer_config.signer_id
                 );
                 let mut found = false;
-                for delta in 1..=signer_config.reward_cycle {
+                let max_dkg_lookback = signer_config.reward_cycle.min(200);
+                for delta in 1..=max_dkg_lookback {
                     let prev_cycle = signer_config.reward_cycle - delta;
                     if let Ok(Some(state)) = signer_db.get_signer_state(prev_cycle) {
                         let has_keys =
