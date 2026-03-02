@@ -199,6 +199,9 @@ pub struct Signer {
     pub endpoint_broadcasted: bool,
     /// Registry of other signers' endpoints (discovered via funaiDB)
     pub signer_registry: crate::encryption::SignerRegistry,
+    /// Block IDs (signer_signature_hash hex) where fraud was detected during validation.
+    /// Used to slash Signers who approved fraudulent blocks.
+    pub fraud_watchlist: HashSet<String>,
 }
 
 impl std::fmt::Display for Signer {
@@ -382,6 +385,7 @@ impl From<SignerConfig> for Signer {
             endpoint_broadcasted: false,
             has_dkg_keys,
             signer_registry: crate::encryption::SignerRegistry::new(),
+            fraud_watchlist: HashSet::new(),
         }
     }
 }
@@ -634,6 +638,16 @@ impl Signer {
                             self.submit_slash_transactions(funai_client, &slash_targets);
                         }
 
+                        // Record this block in the fraud watchlist so we can detect
+                        // if it gets finalized despite our rejection (meaning other
+                        // Signers approved it without proper validation).
+                        let fraud_block_id = block_info.block.block_id().to_string();
+                        self.fraud_watchlist.insert(fraud_block_id.clone());
+                        warn!(
+                            "{self}: Added block {} to fraud watchlist",
+                            fraud_block_id
+                        );
+
                         block_info.valid = Some(false);
                     }
                 }
@@ -812,6 +826,37 @@ impl Signer {
                 );
                 continue;
             }
+
+            // Check if this block's parent was flagged as fraudulent.
+            // If we see a child block, the parent must have been finalized by
+            // the signer set despite the fraud.  Slash all *other* signers.
+            let parent_id = proposal.block.header.parent_block_id.to_string();
+            if self.fraud_watchlist.remove(&parent_id) {
+                warn!(
+                    "{self}: Fraudulent block {} was finalized (child {} proposed). \
+                     Slashing other signers who approved it.",
+                    parent_id,
+                    proposal.block.block_id()
+                );
+                let my_address = funai_client.get_signer_address().clone();
+                let guilty_signers: Vec<PrincipalData> = self
+                    .signer_addresses
+                    .iter()
+                    .filter(|addr| **addr != my_address)
+                    .filter_map(|addr| {
+                        PrincipalData::parse(&addr.to_string()).ok()
+                    })
+                    .collect();
+                if !guilty_signers.is_empty() {
+                    let slash_per_signer: u128 = 100_000_000; // 100 STX penalty
+                    self.submit_signer_slash_transactions(
+                        funai_client,
+                        &guilty_signers,
+                        slash_per_signer,
+                    );
+                }
+            }
+
             let sig_hash = proposal.block.header.signer_signature_hash();
             match self.signer_db.block_lookup(self.reward_cycle, &sig_hash) {
                 Ok(Some(block)) => {
@@ -1155,6 +1200,58 @@ impl Signer {
                     error!(
                         "{self}: Failed to build slash transaction for node {}: {e:?}",
                         node_principal
+                    );
+                }
+            }
+        }
+    }
+
+    /// Submit slash transactions for Signers that approved a block
+    /// containing fraudulent inference transactions.
+    fn submit_signer_slash_transactions(
+        &self,
+        funai_client: &FunaiClient,
+        signer_principals: &[PrincipalData],
+        slash_amount_per_signer: u128,
+    ) {
+        if signer_principals.is_empty() {
+            return;
+        }
+        let signer_addr = funai_client.get_signer_address();
+        let account_nonce = funai_client
+            .get_account_nonce(signer_addr)
+            .unwrap_or(0);
+
+        for (i, signer_principal) in signer_principals.iter().enumerate() {
+            let nonce = account_nonce.wrapping_add(i as u64);
+            match funai_client.build_slash_signer_transaction(
+                signer_principal.clone(),
+                slash_amount_per_signer,
+                Some(self.tx_fee_ustx),
+                nonce,
+            ) {
+                Ok(slash_tx) => {
+                    let txid = slash_tx.txid();
+                    match funai_client.submit_transaction_with_retry(&slash_tx) {
+                        Ok(_) => {
+                            warn!(
+                                "{self}: Submitted signer slash tx {txid} for {} \
+                                 (amount={} µSTX)",
+                                signer_principal, slash_amount_per_signer
+                            );
+                        }
+                        Err(e) => {
+                            error!(
+                                "{self}: Failed to submit signer slash tx for {}: {e:?}",
+                                signer_principal
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!(
+                        "{self}: Failed to build signer slash tx for {}: {e:?}",
+                        signer_principal
                     );
                 }
             }

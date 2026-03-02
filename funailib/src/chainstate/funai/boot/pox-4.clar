@@ -1666,3 +1666,110 @@
           (map-delete infer-nodes { node: node })))
       (var-set infer-total-staked-ustx (- (var-get infer-total-staked-ustx) actual-slash))
       (ok actual-slash))))
+
+;; =============================================================================
+;; Signer (Validator) Collateral Staking & Slashing Extension
+;; =============================================================================
+;; Signers must post collateral (separate from their PoX lock) that can be
+;; slashed for misbehavior: non-participation, signing fraudulent blocks, or
+;; equivocation.  PoX-locked STX stays in the stacker's account and cannot be
+;; burned directly, so this parallel collateral is held by the contract and is
+;; burnable via stx-burn?.
+
+;; Error codes (310+ range)
+(define-constant ERR_SIGNER_ALREADY_STAKED     u310)
+(define-constant ERR_SIGNER_NOT_STAKED         u311)
+(define-constant ERR_SIGNER_INSUFFICIENT_STAKE u312)
+(define-constant ERR_SIGNER_LOCK_NOT_EXPIRED   u313)
+
+;; Minimum collateral: 1000 STX
+(define-constant SIGNER_MIN_COLLATERAL_USTX u1000000000)
+
+;; Signer collateral data
+(define-data-var signer-total-collateral-ustx uint u0)
+
+(define-map signer-collateral
+  { signer: principal }
+  { amount-ustx: uint,
+    lock-start: uint,
+    unlock-height: uint,
+    missed-rounds: uint })
+
+;; Read-only helpers
+(define-read-only (signer-get-collateral (signer principal))
+  (map-get? signer-collateral { signer: signer }))
+
+(define-read-only (signer-total-collateral)
+  (var-get signer-total-collateral-ustx))
+
+;; Stake collateral (Signers call this in addition to stack-stx)
+(define-public (signer-stake-collateral (amount-ustx uint))
+  (begin
+    (asserts! (is-none (map-get? signer-collateral { signer: tx-sender }))
+              (err ERR_SIGNER_ALREADY_STAKED))
+    (asserts! (>= amount-ustx SIGNER_MIN_COLLATERAL_USTX)
+              (err ERR_SIGNER_INSUFFICIENT_STAKE))
+    (try! (stx-transfer? amount-ustx tx-sender (as-contract tx-sender)))
+    (map-set signer-collateral { signer: tx-sender }
+      { amount-ustx: amount-ustx,
+        lock-start: burn-block-height,
+        unlock-height: (+ burn-block-height INFER_MIN_LOCK_PERIOD),
+        missed-rounds: u0 })
+    (var-set signer-total-collateral-ustx
+      (+ (var-get signer-total-collateral-ustx) amount-ustx))
+    (ok true)))
+
+;; Increase collateral
+(define-public (signer-increase-collateral (additional-ustx uint))
+  (let ((info (unwrap! (map-get? signer-collateral { signer: tx-sender })
+                       (err ERR_SIGNER_NOT_STAKED))))
+    (asserts! (> additional-ustx u0) (err ERR_SIGNER_INSUFFICIENT_STAKE))
+    (try! (stx-transfer? additional-ustx tx-sender (as-contract tx-sender)))
+    (map-set signer-collateral { signer: tx-sender }
+      (merge info { amount-ustx: (+ (get amount-ustx info) additional-ustx) }))
+    (var-set signer-total-collateral-ustx
+      (+ (var-get signer-total-collateral-ustx) additional-ustx))
+    (ok true)))
+
+;; Unlock collateral after lock period expires
+(define-public (signer-unlock-collateral)
+  (let ((who tx-sender)
+        (info (unwrap! (map-get? signer-collateral { signer: tx-sender })
+                       (err ERR_SIGNER_NOT_STAKED))))
+    (asserts! (>= burn-block-height (get unlock-height info))
+              (err ERR_SIGNER_LOCK_NOT_EXPIRED))
+    (try! (as-contract (stx-transfer? (get amount-ustx info) tx-sender who)))
+    (map-delete signer-collateral { signer: tx-sender })
+    (var-set signer-total-collateral-ustx
+      (- (var-get signer-total-collateral-ustx) (get amount-ustx info)))
+    (ok true)))
+
+;; Slash a misbehaving Signer's collateral.
+;; Reasons: non-participation, signing a block containing fraud, equivocation.
+;; Authorization is consensus-level (block must be signed by 2/3 threshold).
+(define-public (signer-slash (signer principal) (slash-amount uint))
+  (let ((info (unwrap! (map-get? signer-collateral { signer: signer })
+                       (err ERR_SIGNER_NOT_STAKED)))
+        (current-stake (get amount-ustx info))
+        (actual-slash (if (> slash-amount current-stake) current-stake slash-amount)))
+    (asserts! (> actual-slash u0) (err ERR_SIGNER_INSUFFICIENT_STAKE))
+    ;; Burn the slashed collateral
+    (try! (as-contract (stx-burn? actual-slash tx-sender)))
+    (let ((remaining (- current-stake actual-slash)))
+      (if (> remaining u0)
+        (map-set signer-collateral { signer: signer }
+          (merge info { amount-ustx: remaining }))
+        (map-delete signer-collateral { signer: signer }))
+      (var-set signer-total-collateral-ustx
+        (- (var-get signer-total-collateral-ustx) actual-slash))
+      (ok actual-slash))))
+
+;; Record a missed signing round for a Signer.
+;; After accumulating enough misses, the Signer can be slashed.
+(define-public (signer-record-miss (signer principal))
+  (let ((info (unwrap! (map-get? signer-collateral { signer: signer })
+                       (err ERR_SIGNER_NOT_STAKED)))
+        (new-misses (+ (get missed-rounds info) u1)))
+    (map-set signer-collateral { signer: signer }
+      (merge info { missed-rounds: new-misses }))
+    (ok new-misses)))

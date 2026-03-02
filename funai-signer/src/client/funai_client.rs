@@ -556,6 +556,37 @@ impl FunaiClient {
         )
     }
 
+    /// Build a contract-call transaction to slash a misbehaving Signer.
+    /// Calls `pox-4.signer-slash(signer, slash_amount)`.
+    pub fn build_slash_signer_transaction(
+        &self,
+        signer_principal: PrincipalData,
+        slash_amount: u128,
+        tx_fee: Option<u64>,
+        nonce: u64,
+    ) -> Result<FunaiTransaction, ClientError> {
+        let contract_address = boot_code_addr(self.mainnet);
+        let contract_name = ContractName::from(POX_4_NAME);
+        let function_name = ClarityName::from("signer-slash");
+        let function_args = vec![
+            ClarityValue::Principal(signer_principal),
+            ClarityValue::UInt(slash_amount),
+        ];
+        let tx_fee = tx_fee.unwrap_or(0);
+
+        Self::build_signed_contract_call_transaction(
+            &contract_address,
+            contract_name,
+            function_name,
+            &function_args,
+            &self.funai_private_key,
+            self.tx_version,
+            self.chain_id,
+            nonce,
+            tx_fee,
+        )
+    }
+
     /// Helper function to submit a transaction to the Funai mempool
     pub fn submit_transaction_with_retry(
         &self,

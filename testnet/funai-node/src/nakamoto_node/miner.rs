@@ -388,15 +388,28 @@ impl BlockMinerThread {
         let actual_aggregate_key = coordinator.get_actual_aggregate_key().clone();
 
         *attempts += 1;
-        let signature = coordinator.begin_sign(
+        let result = coordinator.begin_sign(
             new_block,
             *attempts,
             &tip,
             &self.burnchain,
             &sort_db,
             &funaidbs,
-        )?;
+        );
 
+        if let Err(NakamotoNodeError::SignerSignatureError(ref msg)) = result {
+            if msg.contains("Timed out") {
+                let non_responders = coordinator.get_non_responding_signers();
+                if !non_responders.is_empty() {
+                    warn!(
+                        "Signing round timed out. Non-responding signer IDs: {:?} (out of {} total)",
+                        non_responders, coordinator.total_signers
+                    );
+                }
+            }
+        }
+
+        let signature = result?;
         Ok((actual_aggregate_key, signature))
     }
 

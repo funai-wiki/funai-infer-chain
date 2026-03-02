@@ -36,6 +36,7 @@ use wsts::common::PolyCommitment;
 use wsts::curve::ecdsa;
 use wsts::curve::point::Point;
 use wsts::curve::scalar::Scalar;
+use wsts::net::Message as WstsMessage;
 use wsts::state_machine::coordinator::fire::Coordinator as FireCoordinator;
 use wsts::state_machine::coordinator::{Config as CoordinatorConfig, Coordinator};
 use wsts::state_machine::PublicKeys;
@@ -63,6 +64,10 @@ pub struct SignCoordinator {
     slot_version: u32,
     /// The actual aggregate public key used for signing (may differ from on-chain during recovery).
     actual_aggregate_key: Point,
+    /// Signer slot IDs that sent at least one valid packet during the signing round.
+    responding_signers: HashSet<u32>,
+    /// Total number of signers in this reward cycle.
+    pub total_signers: u32,
 }
 
 impl SignCoordinator {
@@ -145,6 +150,8 @@ impl SignCoordinator {
             receiver: Some(receiver),
             wsts_public_keys: signer_entries.public_keys,
             is_mainnet,
+            responding_signers: HashSet::new(),
+            total_signers: num_signers,
             miners_session,
             signing_round_timeout: config.miner.wait_on_signers.clone(),
             reward_cycle,
@@ -255,6 +262,7 @@ impl SignCoordinator {
             ));
         };
 
+        self.responding_signers.clear();
         let start_ts = Instant::now();
         let mut collected_filters = HashSet::new();
         while start_ts.elapsed() <= self.signing_round_timeout {
@@ -313,6 +321,9 @@ impl SignCoordinator {
                                 warn!("Failed to verify FunaiDB packet: {packet:?}");
                                 None
                             } else {
+                                if let Some(sid) = Self::extract_signer_id(&packet.msg) {
+                                    self.responding_signers.insert(sid);
+                                }
                                 Some(packet)
                             }
                         }
@@ -448,6 +459,27 @@ impl SignCoordinator {
         Err(NakamotoNodeError::SignerSignatureError(
             "Timed out waiting for group signature".into(),
         ))
+    }
+
+    /// Extract the signer_id from a WSTS message (only signer-originating
+    /// variants carry one).
+    fn extract_signer_id(msg: &WstsMessage) -> Option<u32> {
+        match msg {
+            WstsMessage::NonceResponse(m) => Some(m.signer_id),
+            WstsMessage::SignatureShareResponse(m) => Some(m.signer_id),
+            WstsMessage::DkgEnd(m) => Some(m.signer_id),
+            WstsMessage::DkgPublicShares(m) => Some(m.signer_id),
+            WstsMessage::DkgPrivateShares(m) => Some(m.signer_id),
+            _ => None,
+        }
+    }
+
+    /// Return the set of signer IDs that did NOT respond during the last
+    /// signing round.  Useful for penalising non-participants.
+    pub fn get_non_responding_signers(&self) -> Vec<u32> {
+        (0..self.total_signers)
+            .filter(|id| !self.responding_signers.contains(id))
+            .collect()
     }
 }
 
