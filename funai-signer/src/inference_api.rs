@@ -29,6 +29,7 @@ use crate::inference_service::{
     InferenceServiceEvent, NodeStatus,
     InferenceServiceState,
 };
+use crate::node_scheduler::TaskCandidate;
 use serde_json::json;
 use funailib::chainstate::funai::{
     FunaiTransaction, TransactionPayload, TransactionVersion, FunaiPublicKey,
@@ -1029,11 +1030,11 @@ impl InferenceApiServer {
             0
         };
         
-        // Get tasks that this node can process
+        // Get tasks that this node can process using scored dispatch
         let (task, node_pk_opt) = {
             let service = self.shared_state.lock().unwrap();
-            
-            // 1. Get supported models for the node
+
+            // 1. Get supported models and public key for the node
             let (supported_models, node_pk) = {
                 let nodes = service.inference_nodes.lock().unwrap();
                 if let Some(node) = nodes.get(&node_id) {
@@ -1046,58 +1047,90 @@ impl InferenceApiServer {
             if supported_models.is_empty() {
                 (None, node_pk)
             } else {
-                // 2. Find a suitable pending task that the node has enough stake for
-                let mut found_task_id = None;
-                {
-                    let pending = service.pending_tasks.lock().unwrap();
-                    for (id, task) in pending.iter() {
-                        // Check if the node supports the task's model type
-                        if !supported_models.contains(&task.model_type) {
-                            continue;
-                        }
-                        
-                        // Check if the node has enough stake (must be >= 3x infer_fee)
-                        let required_stake = task.infer_fee as u128 * 3;
-                        if node_stake_amount < required_stake {
-                            info!(
-                                "Node {} has insufficient stake for task {}: stake={}, required={} (3x infer_fee={})",
-                                node_id, id, node_stake_amount, required_stake, task.infer_fee
-                            );
-                            continue;
-                        }
-                        
-                        found_task_id = Some(id.clone());
-                        break;
-                    }
+                // 2. Update node stake in scheduler
+                if let Ok(mut sched) = service.scheduler.lock() {
+                    sched.ensure_node(&node_id);
+                    sched.update_stake(&node_id, node_stake_amount);
                 }
 
-                // 3. Move task from pending to processing
-                if let Some(task_id) = found_task_id {
-                    let mut pending = service.pending_tasks.lock().unwrap();
-                    if let Some(mut task) = pending.remove(&task_id) {
-                        task.update_status(InferTaskStatus::InProgress);
-                        
-                        let mut processing = service.processing_tasks.lock().unwrap();
-                        processing.insert(task_id.clone(), task.clone());
-                        
-                        // Save to database
-                        if let Ok(db) = service.database.lock() {
-                            if let Err(e) = db.save_task(&task) {
-                                error!("Failed to save task to database: {}", e);
+                // 3. Collect candidate tasks this node can handle (hard gate)
+                let candidate_tasks: Vec<(String, u64, String, u64, f64)> = {
+                    let pending = service.pending_tasks.lock().unwrap();
+                    pending.iter()
+                        .filter(|(_, task)| {
+                            supported_models.contains(&task.model_type)
+                                && node_stake_amount >= task.infer_fee as u128 * 3
+                        })
+                        .map(|(id, task)| {
+                            (
+                                id.clone(),
+                                task.infer_fee,
+                                format!("{:?}", task.model_type),
+                                0u64, // estimated_tokens (unknown at assignment time)
+                                task.infer_fee as f64,
+                            )
+                        })
+                        .collect()
+                };
+
+                if candidate_tasks.is_empty() {
+                    (None, node_pk)
+                } else {
+                    // 4. Use scheduler to pick the best task for this node.
+                    //    In a multi-node scenario the scheduler picks which NODE
+                    //    gets a task; here, since a single node is polling, we
+                    //    let the scheduler score this node against the first
+                    //    available task.
+                    let eligible_nodes = vec![node_id.clone()];
+                    let mut selected_task_id: Option<String> = None;
+
+                    if let Ok(mut sched) = service.scheduler.lock() {
+                        // Update median price for new-node gating
+                        let prices: Vec<f64> = candidate_tasks.iter().map(|t| t.4).collect();
+                        sched.update_median_price(&prices);
+
+                        for (tid, fee, model, est_tokens, price) in &candidate_tasks {
+                            let tc = TaskCandidate {
+                                task_id: tid.clone(),
+                                infer_fee: *fee,
+                                model_type: model.clone(),
+                                estimated_tokens: *est_tokens,
+                                price: *price,
+                            };
+                            if sched.select_node(&eligible_nodes, &tc).is_some() {
+                                selected_task_id = Some(tid.clone());
+                                break;
                             }
                         }
-                        
-                        info!(
-                            "Assigned task {} to node {} (stake={}, infer_fee={}, required={})",
-                            task_id, node_id, node_stake_amount, task.infer_fee, task.infer_fee as u128 * 3
-                        );
-                        
-                        (Some(task), node_pk)
+                    }
+
+                    // 5. Move selected task from pending to processing
+                    if let Some(task_id) = selected_task_id {
+                        let mut pending = service.pending_tasks.lock().unwrap();
+                        if let Some(mut task) = pending.remove(&task_id) {
+                            task.update_status(InferTaskStatus::InProgress);
+
+                            let mut processing = service.processing_tasks.lock().unwrap();
+                            processing.insert(task_id.clone(), task.clone());
+
+                            if let Ok(db) = service.database.lock() {
+                                if let Err(e) = db.save_task(&task) {
+                                    error!("Failed to save task to database: {}", e);
+                                }
+                            }
+
+                            info!(
+                                "Scheduler assigned task {} to node {} (stake={}, infer_fee={}, required={})",
+                                task_id, node_id, node_stake_amount, task.infer_fee, task.infer_fee as u128 * 3
+                            );
+
+                            (Some(task), node_pk)
+                        } else {
+                            (None, node_pk)
+                        }
                     } else {
                         (None, node_pk)
                     }
-                } else {
-                    (None, node_pk)
                 }
             }
         };

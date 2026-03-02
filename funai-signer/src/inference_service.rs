@@ -25,6 +25,7 @@ use slog::{slog_debug, slog_error, slog_info};
 use funai_common::{debug, error, info};
 use tokio::sync::mpsc;
 use rusqlite::{Connection, Result as SqliteResult, params};
+use crate::node_scheduler::NodeScheduler;
 
 /// Inference task status
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -298,7 +299,8 @@ impl NodeStatus {
 
 /// SQLite database manager
 pub struct InferenceDatabase {
-    conn: Connection,
+    /// SQLite connection (pub for scheduler access)
+    pub conn: Connection,
 }
 
 impl InferenceDatabase {
@@ -652,6 +654,8 @@ pub struct InferenceServiceState {
     pub inference_nodes: Arc<Mutex<HashMap<String, InferenceNode>>>,
     /// Database connection
     pub database: Arc<Mutex<InferenceDatabase>>,
+    /// Node scheduler for scored task dispatch
+    pub scheduler: Arc<Mutex<NodeScheduler>>,
     /// Signer's private key for encryption/decryption (optional, set from config)
     pub signer_private_key: Option<funai_common::types::chainstate::FunaiPrivateKey>,
     /// Signer's public key in hex format
@@ -669,12 +673,18 @@ impl InferenceServiceState {
             InferenceDatabase::new(&db_path).expect("Failed to create database")
         ));
 
+        let scheduler = {
+            let db = database.lock().unwrap();
+            Arc::new(Mutex::new(NodeScheduler::new(&db.conn)))
+        };
+
         let state = Self {
             pending_tasks: Arc::new(Mutex::new(HashMap::new())),
             processing_tasks: Arc::new(Mutex::new(HashMap::new())),
             completed_tasks: Arc::new(Mutex::new(HashMap::new())),
             inference_nodes: Arc::new(Mutex::new(HashMap::new())),
             database,
+            scheduler,
             signer_private_key: None,
             signer_public_key_hex: None,
             signer_address: None,
@@ -897,31 +907,52 @@ impl InferenceServiceState {
         }
     }
 
-    /// Complete task
+    /// Complete task and update scheduler stats
     pub fn complete_task(&self, task_id: &str, result: InferTaskResult) -> Result<(), String> {
-        // Remove from processing tasks
         let mut task = {
             let mut processing = self.processing_tasks.lock().map_err(|e| e.to_string())?;
             processing.remove(task_id).ok_or("Task not found in processing")?
         };
 
         let completed_at = result.completed_at;
-        let duration = completed_at.saturating_sub(task.created_at);
-        info!("Inference task submission-to-completion timing: task_id={}, submitted_at={}, completed_at={}, duration={}s",
-            task_id, task.created_at, completed_at, duration);
+        let node_id = result.inference_node_id.clone();
 
-        // Set result and move to completed
+        // Determine assignment time from scheduler or fall back to task creation
+        let assigned_at = {
+            let sched = self.scheduler.lock().map_err(|e| e.to_string())?;
+            sched.get_assigned_at(task_id).unwrap_or(task.created_at)
+        };
+        let latency_secs = completed_at.saturating_sub(assigned_at) as f64;
+
+        info!(
+            "Inference task timing: task_id={}, assigned_at={}, completed_at={}, latency={}s",
+            task_id, assigned_at, completed_at, latency_secs
+        );
+
+        let total_tokens = crate::node_scheduler::extract_total_tokens(&result.output);
+        let success = true;
+
         task.set_result(result);
-        
+
         {
             let mut completed = self.completed_tasks.lock().map_err(|e| e.to_string())?;
             completed.insert(task_id.to_string(), task.clone());
         }
 
-        // Save to database
         if let Ok(db) = self.database.lock() {
             if let Err(e) = db.save_task(&task) {
                 error!("Failed to save task to database: {}", e);
+            }
+            // Update scheduler stats
+            if let Ok(mut sched) = self.scheduler.lock() {
+                sched.record_task_outcome(
+                    &db.conn,
+                    &node_id,
+                    task_id,
+                    success,
+                    total_tokens,
+                    latency_secs,
+                );
             }
         }
 

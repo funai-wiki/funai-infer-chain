@@ -34,6 +34,8 @@ pub mod encryption;
 pub mod inference_service;
 /// The inference API server for handling HTTP requests
 pub mod inference_api;
+/// The node scheduling engine for scored task dispatch
+pub mod node_scheduler;
 /// The primary runloop for the signer
 pub mod runloop;
 /// The signer module for processing events
