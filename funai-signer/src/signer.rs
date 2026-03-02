@@ -30,6 +30,7 @@ use funailib::chainstate::nakamoto::signer_set::NakamotoSigners;
 use funailib::chainstate::nakamoto::{NakamotoBlock, NakamotoBlockVote};
 use funailib::chainstate::funai::boot::SIGNERS_VOTING_FUNCTION_NAME;
 use funailib::chainstate::funai::{FunaiTransaction, TransactionPayload};
+use clarity::vm::types::PrincipalData;
 use funailib::net::api::postblock_proposal::{BlockValidateResponse, ValidateRejectCode};
 use hashbrown::HashSet;
 use libsigner::{
@@ -607,7 +608,7 @@ impl Signer {
                         block_info.valid = Some(true);
                         block_info.invalid_txids = Vec::new();
                     }
-                    Err(invalid_txs) => {
+                    Err((invalid_txs, slash_targets)) => {
                         let mut sorted_invalid_txs = invalid_txs.clone();
                         sorted_invalid_txs.sort();
                         block_info.invalid_txids = sorted_invalid_txs.clone();
@@ -628,9 +629,11 @@ impl Signer {
                             }
                         }
 
-                        // Reject the block so the miner removes invalid infer txs
-                        // from mempool and rebuilds. Valid txs remain in the mempool
-                        // and will be included in the rebuilt block.
+                        // Submit slashing transactions for each fraudulent inference node
+                        if !slash_targets.is_empty() {
+                            self.submit_slash_transactions(funai_client, &slash_targets);
+                        }
+
                         block_info.valid = Some(false);
                     }
                 }
@@ -1107,6 +1110,57 @@ impl Signer {
         }
     }
 
+    /// Submit slashing transactions for misbehaving inference nodes.
+    /// Each target is `(node_principal, infer_fee)`. The slash amount is 3x the
+    /// inference fee, matching the whitepaper's collateral requirement.
+    fn submit_slash_transactions(
+        &self,
+        funai_client: &FunaiClient,
+        targets: &[(PrincipalData, u64)],
+    ) {
+        let signer_addr = funai_client.get_signer_address();
+        let account_nonce = funai_client
+            .get_account_nonce(signer_addr)
+            .unwrap_or(0);
+
+        for (i, (node_principal, infer_fee)) in targets.iter().enumerate() {
+            let slash_amount = (*infer_fee as u128).saturating_mul(3);
+            let nonce = account_nonce.wrapping_add(i as u64);
+
+            match funai_client.build_slash_infer_node_transaction(
+                node_principal.clone(),
+                slash_amount,
+                Some(self.tx_fee_ustx),
+                nonce,
+            ) {
+                Ok(slash_tx) => {
+                    let txid = slash_tx.txid();
+                    match funai_client.submit_transaction_with_retry(&slash_tx) {
+                        Ok(_) => {
+                            warn!(
+                                "{self}: Submitted slash transaction {txid} for node {} \
+                                 (amount={} µSTX, 3x fee={})",
+                                node_principal, slash_amount, infer_fee
+                            );
+                        }
+                        Err(e) => {
+                            error!(
+                                "{self}: Failed to submit slash transaction for node {}: {e:?}",
+                                node_principal
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!(
+                        "{self}: Failed to build slash transaction for node {}: {e:?}",
+                        node_principal
+                    );
+                }
+            }
+        }
+    }
+
     /// Try to extract an array of string tokens from a JSON value.
     /// Only supports object field "first_top_logprobs" (array of strings).
     fn extract_tokens_from_json(value: &serde_json::Value) -> Option<Vec<String>> {
@@ -1125,8 +1179,9 @@ impl Signer {
         &mut self,
         funai_client: &FunaiClient,
         block: &NakamotoBlock,
-    ) -> Result<(), Vec<String>> {
+    ) -> Result<(), (Vec<String>, Vec<(PrincipalData, u64)>)> {
         let mut invalid_txids = Vec::new();
+        let mut slash_targets: Vec<(PrincipalData, u64)> = Vec::new();
         let sig_hash = block.header.signer_signature_hash();
         match  self.signer_db.miner_endpoint_lookup(self.reward_cycle, &sig_hash) {
             Ok(Some(miner_endpoint)) => {
@@ -1142,10 +1197,11 @@ impl Signer {
                                     info!("Infer res for tx {txid}: {infer_res:?}");
                                     
                                     // Verify node_principal matches the worker assigned by the Signer
-                                    if let TransactionPayload::Infer(_, _, _, _, ref node_principal, _, _) = tx.payload {
+                                    if let TransactionPayload::Infer(_, ref amount, _, _, ref node_principal, _, _) = tx.payload {
                                         let node_addr = node_principal.to_string();
                                         if node_addr != infer_res.inference_node_id {
                                             warn!("Node principal mismatch for tx {txid}: expected {}, found {}", infer_res.inference_node_id, node_addr);
+                                            slash_targets.push((node_principal.clone(), *amount));
                                             invalid_txids.push(txid);
                                             continue;
                                         }
@@ -1153,6 +1209,9 @@ impl Signer {
 
                                     if !matches!(infer_res.status, libllm::InferStatus::Success) {
                                         warn!("Infer res isn't ok for tx {txid}: {infer_res:?}");
+                                        if let TransactionPayload::Infer(_, ref amount, _, _, ref node_principal, _, _) = tx.payload {
+                                            slash_targets.push((node_principal.clone(), *amount));
+                                        }
                                         invalid_txids.push(txid);
                                         continue;
                                     }
@@ -1262,6 +1321,9 @@ impl Signer {
                                         }
                                     };
                                     if !ok {
+                                        if let TransactionPayload::Infer(_, ref amount, _, _, ref node_principal, _, _) = tx.payload {
+                                            slash_targets.push((node_principal.clone(), *amount));
+                                        }
                                         invalid_txids.push(txid);
                                         continue;
                                     }
@@ -1290,16 +1352,16 @@ impl Signer {
                 warn!("{self}: No miner endpoint found for block {sig_hash}.");
                 // If we can't find the endpoint, we can't verify Infer transactions.
                 // We should return any already found invalid txids.
-                return Err(invalid_txids);
+                return Err((invalid_txids, slash_targets.clone()));
             }
             Err(e) => {
                 error!("{self}: Failed to connect to signer DB: {e:?}");
-                return Err(invalid_txids);
+                return Err((invalid_txids, slash_targets.clone()));
             }
         }
 
         if !invalid_txids.is_empty() {
-            return Err(invalid_txids);
+            return Err((invalid_txids, slash_targets.clone()));
         }
 
         if self.approved_aggregate_public_key.is_some() {
@@ -1337,7 +1399,7 @@ impl Signer {
                 {
                     warn!("{self}: Failed to send block rejection to funai-db: {e:?}",);
                 }
-                return Err(invalid_txids);
+                return Err((invalid_txids, slash_targets.clone()));
             }
             Ok(())
         } else {
@@ -1354,7 +1416,7 @@ impl Signer {
             {
                 warn!("{self}: Failed to send block submission to funai-db: {e:?}",);
             }
-            Err(invalid_txids)
+            Err((invalid_txids, slash_targets.clone()))
         }
     }
 

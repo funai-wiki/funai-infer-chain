@@ -18,7 +18,7 @@ use std::net::SocketAddr;
 use funailib::burnchains::Txid;
 use funailib::chainstate::nakamoto::NakamotoBlock;
 use funailib::chainstate::funai::boot::{
-    NakamotoSignerEntry, SIGNERS_VOTING_FUNCTION_NAME, SIGNERS_VOTING_NAME,
+    NakamotoSignerEntry, POX_4_NAME, SIGNERS_VOTING_FUNCTION_NAME, SIGNERS_VOTING_NAME,
 };
 use funailib::chainstate::funai::{
     FunaiTransaction, FunaiTransactionSigner, TransactionAnchorMode, TransactionAuth,
@@ -509,6 +509,37 @@ impl FunaiClient {
             ClarityValue::buff_from(dkg_public_key.compress().data.to_vec())?,
             ClarityValue::UInt(round as u128),
             ClarityValue::UInt(reward_cycle as u128),
+        ];
+        let tx_fee = tx_fee.unwrap_or(0);
+
+        Self::build_signed_contract_call_transaction(
+            &contract_address,
+            contract_name,
+            function_name,
+            &function_args,
+            &self.funai_private_key,
+            self.tx_version,
+            self.chain_id,
+            nonce,
+            tx_fee,
+        )
+    }
+
+    /// Build a contract-call transaction to slash a misbehaving inference node.
+    /// Calls `pox-4.infer-slash-node(node, slash_amount)`.
+    pub fn build_slash_infer_node_transaction(
+        &self,
+        node_principal: PrincipalData,
+        slash_amount: u128,
+        tx_fee: Option<u64>,
+        nonce: u64,
+    ) -> Result<FunaiTransaction, ClientError> {
+        let contract_address = boot_code_addr(self.mainnet);
+        let contract_name = ContractName::from(POX_4_NAME);
+        let function_name = ClarityName::from("infer-slash-node");
+        let function_args = vec![
+            ClarityValue::Principal(node_principal),
+            ClarityValue::UInt(slash_amount),
         ];
         let tx_fee = tx_fee.unwrap_or(0);
 

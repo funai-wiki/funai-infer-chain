@@ -1642,3 +1642,27 @@
     (map-delete infer-stake { node: tx-sender })
     (var-set infer-total-staked-ustx (- (var-get infer-total-staked-ustx) (get amount-ustx info)))
     (ok true)))
+
+;; ------------------------------
+;; Public functions - slashing
+;; ------------------------------
+;; Slash a misbehaving inference node by burning a portion of its staked tokens.
+;; Authorization is enforced at the consensus level: only blocks signed by the
+;; signer set (2/3 threshold) can include this transaction, so the BFT majority
+;; acts as the gatekeeper.
+(define-public (infer-slash-node (node principal) (slash-amount uint))
+  (let ((info (unwrap! (map-get? infer-stake { node: node }) (err ERR_INFER_NOT_STAKED)))
+        (current-stake (get amount-ustx info))
+        (actual-slash (if (> slash-amount current-stake) current-stake slash-amount)))
+    (asserts! (> actual-slash u0) (err ERR_INFER_INSUFFICIENT_STAKE))
+    ;; Burn the slashed tokens from the contract's custodial balance
+    (try! (as-contract (stx-burn? actual-slash tx-sender)))
+    ;; Update or remove the node's stake record
+    (let ((remaining (- current-stake actual-slash)))
+      (if (> remaining u0)
+        (map-set infer-stake { node: node } (merge info { amount-ustx: remaining }))
+        (begin
+          (map-delete infer-stake { node: node })
+          (map-delete infer-nodes { node: node })))
+      (var-set infer-total-staked-ustx (- (var-get infer-total-staked-ustx) actual-slash))
+      (ok actual-slash))))

@@ -45,6 +45,7 @@ const TPS_WINDOW_SIZE: usize = 1000;
 const FORCED_RECALC_THRESHOLD: u64 = 100;
 
 const PENALTY_COOLDOWN_SECS: u64 = 3600;
+const SLASH_COOLDOWN_SECS: u64 = 86400 * 7;
 
 // ---------------------------------------------------------------------------
 // Per-node statistics
@@ -344,6 +345,23 @@ impl NodeScheduler {
         self.in_flight.remove(task_id);
 
         // 4. Persist
+        self.save_node_stats(conn, node_id);
+    }
+
+    /// Record an on-chain slash for a fraudulent inference node.
+    /// This is much harsher than a normal task failure: the fail counter is
+    /// multiplied by 10 and a 7-day cooldown is applied.
+    pub fn record_slash(
+        &mut self,
+        conn: &Connection,
+        node_id: &str,
+    ) {
+        self.ensure_node(node_id);
+        if let Some(s) = self.stats.get_mut(node_id) {
+            s.fail *= 10.0;
+            s.penalty_until = now_secs() + SLASH_COOLDOWN_SECS;
+            warn!("Node {} slashed: fail={:.1}, cooldown until {}", node_id, s.fail, s.penalty_until);
+        }
         self.save_node_stats(conn, node_id);
     }
 
